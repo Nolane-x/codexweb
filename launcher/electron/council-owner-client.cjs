@@ -40,8 +40,9 @@ async function bindCurrentConversationAsLead({ conversationUrl, projectName }, o
   if (typeof fetchImpl !== "function") throw new Error("Council owner-control fetch is unavailable");
   const timeoutMs = Number.isFinite(options.timeoutMs) ? Math.max(100, Math.min(30_000, Math.trunc(options.timeoutMs))) : OWNER_REQUEST_TIMEOUT_MS;
   const controller = new AbortController();
+  // This deadline intentionally stays referenced: a Council bind request must settle or abort
+  // deterministically even if no other event-loop handles remain.
   const timer = setTimeout(() => controller.abort(new Error("Council owner-control request timed out")), timeoutMs);
-  timer.unref?.();
   try {
     const response = await fetchImpl(`${endpoint}/start-lead`, {
       method: "POST",
