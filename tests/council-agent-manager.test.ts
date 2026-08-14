@@ -8,9 +8,11 @@ import { ManagedAgentStateStore } from "../src/council/managed-agent-state";
 class FakeCouncil {
   state: any = { version: 1, agents: [], credentials: [], rooms: [{ id: "core", name: "Core", mission: "Build", createdAt: "", updatedAt: "" }], messages: [], tasks: [], decisions: [], wakes: [], checkpoints: [] };
   wakeTransitions: string[] = [];
+  presenceTouches: string[] = [];
   snapshot() { return structuredClone(this.state); }
   transaction<T>(work: (store: FakeCouncil) => T): T { const before = structuredClone(this.state); try { return work(this); } catch (error) { this.state = before; throw error; } }
   joinAgent(input: any) { if (!this.state.agents.some((agent: any) => agent.id === input.id)) this.state.agents.push({ ...input, joinedAt: "", updatedAt: "" }); return { agent: input, agentToken: "x", credentialIssued: true }; }
+  touchAgentPresence(agentId: string) { this.presenceTouches.push(agentId); return { agentId, freshness: "fresh" as const, lastSeenAt: "", leaseExpiresAt: "" }; }
   say(input: any) { const id = `m${this.state.messages.length + 1}`; const message = { id, threadId: input.replyTo || id, createdAt: "", ...input }; this.state.messages.push(message); return message; }
   readRoom(id: string, limit = 40) { return this.state.messages.filter((message: any) => message.roomId === id).slice(-limit); }
   createTask(input: any) { const task = { id: `t${this.state.tasks.length + 1}`, status: "todo", createdAt: "", updatedAt: "", ...input }; this.state.tasks.push(task); return task; }
@@ -67,6 +69,7 @@ describe("CouncilAgentManager", () => {
       expect(result.id).toBe("bob");
       expect(managed.get("bob")?.conversationUrl).toBe("https://chatgpt.com/c/bob");
       expect(council.state.messages.at(-1).body).toBe("Bob found a race");
+      expect(council.presenceTouches).toContain("bob");
       expect(calls.at(-1).release).toBe("bob");
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
@@ -89,6 +92,7 @@ describe("CouncilAgentManager", () => {
       expect(calls[0].resurrectionPrompt).toContain("Review this");
       expect(council.wakeTransitions).toEqual(["dispatched", "target-running", "replied"]);
       expect(council.state.wakes[0].status).toBe("replied");
+      expect(council.presenceTouches).toContain("bob");
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 
