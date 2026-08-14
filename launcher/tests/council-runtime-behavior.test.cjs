@@ -1,5 +1,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const path = require("node:path");
+const os = require("node:os");
 const { RuntimeSupervisor } = require("../electron/runtime-supervisor.cjs");
 const { RuntimeHost } = require("../electron/runtime.cjs");
 
@@ -34,21 +36,32 @@ test("Council RuntimeSupervisor starts only the tunnel", async () => {
   assert.ok(!calls.some(call => call[0] === "startDaemon"));
 });
 
-test("Council RuntimeHost setupCouncilMcp dispatches council-setup", async () => {
+test("Council RuntimeHost setupCouncilMcp dispatches council-setup and never Codex route operations", async () => {
   const calls = [];
   const host = Object.create(RuntimeHost.prototype);
+  const configPath = path.join(os.tmpdir(), `codexweb-council-runtime-${process.pid}.json`);
   Object.assign(host, {
     browserDescriptorPath: "/private/launcher-browser.json",
+    platform: process.platform,
     currentOperation: () => null,
     mcpCredentialsConfigured: () => true,
-    runSetup: async (name, args, options) => {
+    isCouncilRuntime: () => true,
+    supervisor: {
+      configPath,
+      stopForSetup: async () => calls.push({ name: "stop" }),
+      startIfConfigured: async () => ({ status: "ready" }),
+      clearState: () => calls.push({ name: "clear" }),
+    },
+    run: async (name, args, options) => {
       calls.push({ name, args, options });
       return { stdout: "ok" };
     },
   });
   await host.setupCouncilMcp({ replace: false });
-  assert.equal(calls.length, 1);
-  assert.equal(calls[0].name, "council-setup");
-  assert.equal(calls[0].args[0], "council-setup");
-  assert.ok(!calls[0].args.includes("--replace-codex-route"));
+  const setup = calls.find(call => call.name === "council-setup");
+  assert.ok(setup);
+  assert.equal(setup.args[0], "council-setup");
+  assert.ok(!setup.args.includes("--replace-codex-route"));
+  assert.ok(!setup.args.includes("route"));
+  assert.ok(!setup.args.includes("setup"));
 });
