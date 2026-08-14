@@ -38,36 +38,45 @@ fi
 
 for DOC in LICENSE Bun-1.3.14.md THIRD_PARTY_NOTICES.txt; do
   curl -fsSL "$BASE_URL/$DOC" -o "$TEMP_DIR/$DOC"
+  DOC_EXPECTED="$(awk -v asset="$DOC" '$2 == asset { print $1 }' "$TEMP_DIR/checksums.txt")"
+  DOC_ACTUAL="$(shasum -a 256 "$TEMP_DIR/$DOC" | awk '{ print $1 }')"
+  if [ -z "$DOC_EXPECTED" ] || [ "$DOC_ACTUAL" != "$DOC_EXPECTED" ]; then
+    echo "SHA-256 verification failed for $DOC" >&2
+    exit 1
+  fi
 done
 
-mkdir -p "$BIN_DIR" "$LIB_DIR" "$DOC_DIR"
-rm -rf "$STAGE_DIR"
-mkdir -p "$STAGE_DIR"
+mkdir -p "$LIB_DIR" "$BIN_DIR" "$DOC_DIR"
+mkdir "$STAGE_DIR"
 tar -xzf "$TEMP_DIR/$ASSET" -C "$STAGE_DIR"
-
-RUNTIME="$STAGE_DIR/runtime/bun"
-ENTRY="$STAGE_DIR/runtime/index.js"
-if [ ! -x "$RUNTIME" ] || [ ! -f "$ENTRY" ]; then
-  echo "Release runtime is incomplete" >&2
+if [ ! -x "$STAGE_DIR/bin/codex-chatgpt-web" ] || [ ! -x "$STAGE_DIR/runtime/bun" ]; then
+  echo "Runtime archive is incomplete" >&2
+  exit 1
+fi
+if [ "$("$STAGE_DIR/bin/codex-chatgpt-web" --version)" != "$VERSION" ]; then
+  echo "Runtime archive version does not match $VERSION" >&2
   exit 1
 fi
 
-if [ -d "$TARGET_DIR" ]; then
-  rm -rf "$BACKUP_DIR"
+if [ -e "$TARGET_DIR" ]; then
   mv "$TARGET_DIR" "$BACKUP_DIR"
 fi
-mv "$STAGE_DIR" "$TARGET_DIR"
-rm -rf "$BACKUP_DIR"
+if ! mv "$STAGE_DIR" "$TARGET_DIR"; then
+  if [ -e "$BACKUP_DIR" ]; then mv "$BACKUP_DIR" "$TARGET_DIR"; fi
+  exit 1
+fi
 
-cat > "$BIN_DIR/codex-chatgpt-web" <<EOF
-#!/bin/sh
-exec "$TARGET_DIR/runtime/bun" "$TARGET_DIR/runtime/index.js" "\$@"
-EOF
-chmod 0755 "$BIN_DIR/codex-chatgpt-web"
+ln -sfn "$TARGET_DIR/bin/codex-chatgpt-web" "$BIN_DIR/.codex-chatgpt-web.next"
+mv -f "$BIN_DIR/.codex-chatgpt-web.next" "$BIN_DIR/codex-chatgpt-web"
+rm -f "$BIN_DIR/codex-chatgpt-web.legacy-standalone"
+for DOC in LICENSE Bun-1.3.14.md THIRD_PARTY_NOTICES.txt; do
+  install -m 0644 "$TEMP_DIR/$DOC" "$DOC_DIR/$DOC"
+done
+if [ -e "$BACKUP_DIR" ]; then rm -rf "$BACKUP_DIR"; fi
 
-cp "$TEMP_DIR/LICENSE" "$DOC_DIR/LICENSE"
-cp "$TEMP_DIR/Bun-1.3.14.md" "$DOC_DIR/Bun-1.3.14.md"
-cp "$TEMP_DIR/THIRD_PARTY_NOTICES.txt" "$DOC_DIR/THIRD_PARTY_NOTICES.txt"
-
-"$BIN_DIR/codex-chatgpt-web" --version
-printf 'Installed codex-chatgpt-web %s to %s\n' "$VERSION" "$BIN_DIR/codex-chatgpt-web"
+echo "Installed $TARGET_DIR"
+if [ "$#" -gt 0 ]; then
+  "$TARGET_DIR/bin/codex-chatgpt-web" setup "$@"
+  exit 0
+fi
+echo "Next: $BIN_DIR/codex-chatgpt-web setup --browser-only --acknowledge-unofficial"
