@@ -1,3 +1,4 @@
+const { randomUUID } = require("node:crypto");
 const { onCouncilRuntimeLiveChanged } = require("./council-runtime-evidence.cjs");
 
 const DEFAULT_PORT = 17_842;
@@ -6,9 +7,20 @@ const DEFAULT_WAIT_MS = 15_000;
 const DEFAULT_RETRY_MS = 1_500;
 
 const CAPABILITY_NAMES = ["secureTunnel", "localRepo", "githubConnector", "fullMcp", "wakeEngine"];
+const SAFE_ERROR_KINDS = new Set(["Error", "TypeError", "RangeError", "SyntaxError", "AbortError", "TimeoutError"]);
 
 function safeReason(code, retryable = true) {
   return { code, retryable };
+}
+
+function safeErrorKind(error) {
+  const name = error instanceof Error && typeof error.name === "string" ? error.name : "Error";
+  return SAFE_ERROR_KINDS.has(name) ? name : "Error";
+}
+
+function safeCorrelationId(value) {
+  if (typeof value === "string" && /^[A-Za-z0-9._:-]{1,120}$/.test(value)) return value;
+  return `council-${randomUUID()}`;
 }
 
 function unavailableCapabilities() {
@@ -115,6 +127,9 @@ class CouncilConnectionSupervisor {
     this.capabilityUnsubscribe = null;
     this.publish = typeof options.publish === "function" ? options.publish : () => {};
     this.logger = options.logger;
+    this.now = typeof options.now === "function" ? options.now : Date.now;
+    this.correlationId = safeCorrelationId(options.correlationId);
+    this.staleSinceMs = null;
     this.retryMs = Number.isFinite(options.retryMs) ? Math.max(100, Math.trunc(options.retryMs)) : DEFAULT_RETRY_MS;
     this.running = false;
     this.abortController = null;
@@ -129,6 +144,15 @@ class CouncilConnectionSupervisor {
 
   snapshot() { return structuredClone(this.runtime); }
   emit() { this.publish(this.snapshot()); }
+
+  diagnostic(level, event, fields = {}) {
+    try {
+      const writer = this.logger?.[level];
+      if (typeof writer === "function") writer.call(this.logger, event, { correlationId: this.correlationId, ...fields });
+    } catch {
+      // Diagnostics are non-authoritative hints and cannot perturb Council synchronization.
+    }
+  }
 
   ensureCapabilitySubscription() {
     if (this.capabilityUnsubscribe || typeof this.subscribeCapabilityChanges !== "function") return;
@@ -147,6 +171,8 @@ class CouncilConnectionSupervisor {
 
   applyEnvelope(envelope) {
     const value = validateSnapshotEnvelope(envelope);
+    const observedAt = this.now();
+    const staleSinceMs = this.staleSinceMs;
     this.runtime = {
       controlPlane: { state: "connected" },
       projection: {
@@ -158,7 +184,13 @@ class CouncilConnectionSupervisor {
       managedProject: managedProjectFromState(value.state),
       capabilities: normalizeCapabilities(this.capabilitiesProvider),
     };
+    this.staleSinceMs = null;
     this.emit();
+    if (staleSinceMs !== null) {
+      this.diagnostic("info", "council.shared_projection_recovered", {
+        staleDurationMs: Math.max(0, observedAt - staleSinceMs),
+      });
+    }
     return this.snapshot();
   }
 
@@ -166,6 +198,8 @@ class CouncilConnectionSupervisor {
     const reason = safeReason(code, true);
     const previous = this.runtime.projection;
     if ((previous.syncState === "live" || previous.syncState === "stale") && previous.state) {
+      const firstStaleTransition = previous.syncState === "live" || this.staleSinceMs === null;
+      if (this.staleSinceMs === null) this.staleSinceMs = this.now();
       this.runtime = {
         ...this.runtime,
         controlPlane: { state: "degraded", reason },
@@ -178,6 +212,8 @@ class CouncilConnectionSupervisor {
         },
         capabilities: normalizeCapabilities(this.capabilitiesProvider),
       };
+      this.emit();
+      if (firstStaleTransition) this.diagnostic("warn", "council.shared_projection_stale", { reasonCode: code });
     } else {
       this.runtime = {
         ...this.runtime,
@@ -185,21 +221,27 @@ class CouncilConnectionSupervisor {
         projection: { syncState: "error", reason },
         capabilities: normalizeCapabilities(this.capabilitiesProvider),
       };
+      this.emit();
     }
-    this.emit();
     return this.snapshot();
   }
 
   async hydrateOnce(signal) {
+    const startedAt = this.now();
     const hasGoodProjection = this.runtime.projection.syncState === "live" || this.runtime.projection.syncState === "stale";
     if (!hasGoodProjection) {
       this.runtime = { ...this.runtime, controlPlane: { state: "connecting" }, projection: { syncState: "hydrating" } };
       this.emit();
     }
     try {
-      return this.applyEnvelope(await this.client.getSnapshot(signal));
+      const runtime = this.applyEnvelope(await this.client.getSnapshot(signal));
+      this.diagnostic("info", "council.shared_hydrated", { latencyMs: Math.max(0, this.now() - startedAt) });
+      return runtime;
     } catch (error) {
-      this.logger?.warn?.("council.shared_snapshot_failed", { reason: error instanceof Error ? error.name : "Error" });
+      this.diagnostic("warn", "council.shared_snapshot_failed", {
+        reason: safeErrorKind(error),
+        latencyMs: Math.max(0, this.now() - startedAt),
+      });
       return this.markFailure("SNAPSHOT_FAILED");
     }
   }
@@ -228,6 +270,7 @@ class CouncilConnectionSupervisor {
         if (signal.aborted) break;
         if (frame?.type === "idle") continue;
         if (frame?.type === "resync-required") {
+          this.diagnostic("info", "council.shared_resync_required", { reasonCode: "RESYNC_REQUIRED" });
           this.runtime = { ...this.runtime, controlPlane: { state: "degraded", reason: safeReason("RESYNC_REQUIRED", true) } };
           this.emit();
           await this.hydrateOnce(signal);
@@ -240,7 +283,7 @@ class CouncilConnectionSupervisor {
         throw new Error("Council sync continuation frame is invalid");
       } catch (error) {
         if (signal.aborted) break;
-        this.logger?.warn?.("council.shared_stream_interrupted", { reason: error instanceof Error ? error.name : "Error" });
+        this.diagnostic("warn", "council.shared_stream_interrupted", { reason: safeErrorKind(error) });
         this.markFailure("STREAM_INTERRUPTED");
         await this.sleep(this.retryMs, signal);
       }
