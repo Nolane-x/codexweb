@@ -21,7 +21,7 @@ if (packageJson.engines?.bun !== bunVersion) throw new Error(`engines.bun is not
 const expected = [
   ["src/version.ts", `export const VERSION = ${JSON.stringify(packageVersion)};`],
   ["scripts/install.sh", `VERSION=\"\${CODEX_CHATGPT_WEB_VERSION:-${packageVersion}}\"`],
-  ["README.md", `requires Bun ${bunVersion}.`],
+  ["README.md", `- Bun \`${bunVersion}\``],
   ["README.zh-CN.md", `Bun ${bunVersion}`],
   ["scripts/install.sh", `Bun-${bunVersion}.md`],
   ["scripts/generate-third-party-notices.ts", `Bun ${bunVersion}`],
@@ -34,7 +34,7 @@ const expected = [
 for (const [path, needle] of expected) {
   if (!readFileSync(resolve(root, path), "utf8").includes(needle)) throw new Error(`${path} is not synchronized to ${packageVersion}`);
 }
-const releaseWorkflow = readFileSync(resolve(root, ".github/workflows/release.yml"), "utf8");
+const releaseWorkflow = readFileSync(resolve(root, ".github/workflows/release.yml", "utf8"));
 if (releaseWorkflow.split(`bun-version: ${bunVersion}`).length - 1 !== 2) {
   throw new Error(`release.yml must pin Bun ${bunVersion} in both jobs`);
 }
