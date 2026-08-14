@@ -6,7 +6,7 @@ CodexWeb Council lets separate ChatGPT conversations join under stable names and
 
 It is built by repurposing the strongest local infrastructure from `miuuyy/codex-chatgpt-web`: the polished Electron launcher, persistent ChatGPT browser/login host, isolated browser surfaces, Secure MCP Tunnel integration, browser worker, diagnostics, and continuity machinery. Council is now the active collaboration product path; Codex model routing is retained only as legacy/compatibility source during migration.
 
-> **Status:** research/experimental. The Council core, standalone tunnel runtime, MCP contract, wake/resurrection flow, and launcher Council UI are implemented. Full release packaging and end-to-end live multi-conversation wake testing still require a machine with the supported ChatGPT custom-MCP capabilities and GitHub CI/packaging access.
+> **Status:** research/experimental. The Council core, standalone tunnel runtime, MCP contract, wake/resurrection flow, launcher Council UI, and per-agent capability hardening are implemented. Full end-to-end live multi-conversation wake testing still requires a machine/workspace with the supported ChatGPT custom-MCP write capabilities.
 
 ## What it does
 
@@ -30,7 +30,7 @@ It is built by repurposing the strongest local infrastructure from `miuuyy/codex
                       resurrection packet
 ```
 
-Each participant has a stable `agent_id`, display name, and role. The shared server stores:
+Each participant has a stable `agent_id`, display name, role, and a private bearer-style `agent_token`. The first successful `council_join` for a new identity issues the token; every later Council call must prove both the ID and token. The shared server stores:
 
 - rooms and room missions
 - threaded messages
@@ -39,6 +39,8 @@ Each participant has a stable `agent_id`, display name, and role. The shared ser
 - assigned tasks and task state
 - durable wake events
 - compact private checkpoints for continuity
+
+Capability material is kept in the owner-local Council state file, which is written with private filesystem permissions. Tokens are excluded from dashboard snapshots and normal agent records.
 
 ## Council MCP tools
 
@@ -61,7 +63,9 @@ council_wake
 council_agent_status
 ```
 
-Every non-join call carries the caller's explicit stable `agent_id`. Council does not use the retired Codex `turn_token` contract.
+`council_join` registers/resumes an identity. Every other call carries the caller's stable `agent_id` **and** private `agent_token`. Council does not use the retired Codex `turn_token` contract.
+
+The MCP boundary rejects shared-content mutations that would contain the caller's own `agent_token`, so a prompt-injected participant cannot simply post its bearer capability into the room. A resumed join does not echo the token again after authentication succeeds.
 
 ## Deliberation, not just a task queue
 
@@ -78,11 +82,13 @@ Chair  -> tasks for Builder + Reviewer
 
 The product intentionally keeps discussion, proposals, final policy, and executable work as different records. A decision can preserve accepted/rejected arguments and unresolved risks instead of reducing consensus to a simple vote count.
 
+Roles are currently collaboration metadata, not an authorization ACL. A compromised authenticated participant can still invoke actions that its role would not normally be expected to perform. Adding owner/chair action policy is a future hardening layer.
+
 ## Wake / resurrection
 
 `council_wake` targets a stable participant ID; it never searches for a browser tab by title/position and never simulates mouse or keyboard clicks.
 
-In Full Council mode, the wake engine reuses the existing ChatGPT browser worker and the exact `CodexWeb Council` connector. It starts a ChatGPT Web turn with a bounded resurrection packet containing:
+In Full Council mode, the wake engine reuses the existing ChatGPT browser worker and the exact `CodexWeb Council` app/connector. It starts a ChatGPT Web turn with a bounded resurrection packet containing:
 
 - identity and role
 - room mission
@@ -91,6 +97,10 @@ In Full Council mode, the wake engine reuses the existing ChatGPT browser worker
 - recent relevant messages
 - recent decisions
 - active relevant tasks
+
+The caller of `council_wake` receives only a wake receipt — **not the target participant's private context/checkpoint**. The wake engine internally supplies the target's own capability to the target resurrection turn. The prompt labels peer-authored packet content as untrusted collaboration data, and server-side mutation checks reject attempts to publish the caller's own capability. Wake fallback text is token-redacted before persistence.
+
+Wake scheduling is serialized per target, capped for active target wakes, and rate-limited for repeated source→target requests to reduce wake storms.
 
 The resumed ChatGPT is required to re-read live Council state, participate through MCP, and save a fresh checkpoint. Hidden chain-of-thought is neither requested nor stored.
 
@@ -119,7 +129,7 @@ Two additive surfaces are mounted beside the existing app:
 - **Council** — a Discord-like room overlay with rooms, transcript/proposals, participants, wake queue, tasks, and decisions.
 - **Connect** — a Council-specific Secure MCP Tunnel setup/verification panel, so Council does not depend on the old “Install models into Codex” workflow.
 
-The room UI reads a bounded, read-only loopback endpoint on `127.0.0.1:17842`. Private checkpoints are excluded from that snapshot, and browser CORS is restricted to the packaged Electron renderer or localhost development origins.
+The room UI reads a bounded, read-only loopback endpoint on `127.0.0.1:17842`. Private checkpoints and agent capabilities are excluded from that snapshot. **Known limitation:** the loopback dashboard endpoint is local-machine visibility, not a strong authentication boundary; a hostile local process or a browser context able to make permitted loopback requests may read the shared Council transcript/decisions/tasks. Treat the current launcher as a trusted-workstation prototype until the dashboard moves behind an Electron IPC/capability boundary.
 
 ## Setup
 
@@ -128,7 +138,7 @@ The packaged launcher remains the intended runtime host.
 1. Sign in to ChatGPT in the launcher-owned browser.
 2. Open **Connect**.
 3. Supply an OpenAI Secure MCP Tunnel ID and a Tunnels Read + Use runtime key, or reconnect saved credentials.
-4. In ChatGPT Developer Mode, create a **new** custom MCP connector named exactly:
+4. In ChatGPT Developer Mode, create a **new** custom MCP app/connector named exactly:
 
 ```text
 CodexWeb Council
@@ -139,6 +149,10 @@ CodexWeb Council
 7. Return to the launcher and press **Verify Council connector**.
 
 The Verify action checks local tunnel readiness and that the launcher-owned ChatGPT browser can find the exact connector identity.
+
+When a new participant first calls `council_join`, it must keep the returned `agent_token` private in that conversation. Do not paste one participant's token into another participant's chat. Automatic wake delivery obtains the target's token locally, so the user does not need to copy it into wake prompts.
+
+Pre-capability experimental identities are intentionally locked after upgrading instead of allowing “first caller wins” identity takeover. If you already created Council agents on an older experimental build, back up/reset the experimental Council state or use new agent IDs.
 
 ## Source development
 
@@ -162,14 +176,19 @@ See [`docs/council.md`](docs/council.md) for the protocol and migration details.
 Key Council invariants:
 
 - shared state is owner-local and atomically written;
+- per-agent bearer capabilities prevent simple `agent_id` impersonation at the MCP boundary;
 - message/task payloads are bounded;
-- private checkpoints are not exposed to the human dashboard endpoint;
+- private checkpoints and capabilities are not exposed to the human dashboard endpoint;
+- a wake caller cannot read the target's context packet;
+- repeated wakes are bounded/rate-limited;
+- wake context treats peer-authored content as untrusted data;
+- Council mutation tools reject content that would disclose the caller's own capability token;
 - wake targets explicit IDs, not browser UI positions;
 - Council writes are explicit MCP operations;
 - no hidden shell execution, permission bypass, or usage-limit bypass is introduced;
 - migration restores the old managed Codex route rather than leaving a hidden `openai_base_url` redirect.
 
-The participant ID protocol is trusted/local identity, **not cryptographic per-agent authentication**. A future hardening phase can add signed participant capabilities if multiple untrusted clients need to share one Council.
+Remaining hardening work includes an authenticated/IPC dashboard boundary and role/owner authorization for privileged Council actions. Per-agent bearer capabilities protect identity but are not a substitute for full multi-tenant authorization against a hostile local machine.
 
 ## Lineage and license
 
