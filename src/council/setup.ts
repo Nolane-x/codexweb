@@ -29,10 +29,9 @@ export interface CouncilSetupResult {
   reusedCredentials: boolean;
 }
 
-function existingCouncilConfig(): AppConfig | undefined {
+function existingCodexWebConfig(): AppConfig | undefined {
   if (!existsSync(getConfigPath())) return undefined;
-  const config = loadConfigForSetup();
-  return config.mode === "full" && config.appName === COUNCIL_CONNECTOR_NAME ? config : undefined;
+  return loadConfigForSetup();
 }
 
 export async function setupCouncil(options: CouncilSetupOptions): Promise<CouncilSetupResult> {
@@ -41,18 +40,21 @@ export async function setupCouncil(options: CouncilSetupOptions): Promise<Counci
     throw new Error(`Launcher browser descriptor does not exist: ${descriptorPath}`);
   }
 
-  // Council owns only its own config and Tunnel credentials. It intentionally never reads,
-  // restores, migrates, or mutates ~/.codex/config.toml or the legacy Codex integration journal.
-  const previous = existingCouncilConfig();
+  // Council may reuse the previous codexweb Tunnel credentials, but it intentionally never reads,
+  // restores, migrates, or mutates CODEX_HOME, ~/.codex/config.toml, model caches, or the legacy
+  // Codex integration journal. The old app config is only a credential source.
+  const existing = existingCodexWebConfig();
+  const previousCouncil = existing?.mode === "full" && existing.appName === COUNCIL_CONNECTOR_NAME ? existing : undefined;
+  const reusableTunnel = existing?.mode === "full" ? existing.tunnel : undefined;
   const freshCredentials = Boolean(options.tunnelId || options.runtimeKeyFile);
   if (freshCredentials && (!options.tunnelId || !options.runtimeKeyFile)) {
     throw new Error("Council setup requires both tunnelId and runtimeKeyFile when replacing tunnel credentials");
   }
-  if (!freshCredentials && (!previous || !previous.tunnel)) {
+  if (!freshCredentials && !reusableTunnel) {
     throw new Error("Council setup needs a Tunnel ID and Tunnels Read + Use runtime key for first-time setup");
   }
 
-  const base = previous ?? defaultConfig("full");
+  const base = previousCouncil ?? defaultConfig("full");
   const tunnel = freshCredentials
     ? createTunnelConfig({
         binaryPath: await installTunnelClient(),
@@ -61,7 +63,13 @@ export async function setupCouncil(options: CouncilSetupOptions): Promise<Counci
         profileName: "codexweb-council",
         alias: "codexweb-council",
       })
-    : previous!.tunnel!;
+    : createTunnelConfig({
+        binaryPath: reusableTunnel!.binaryPath,
+        tunnelId: reusableTunnel!.tunnelId,
+        runtimeKeyFile: reusableTunnel!.runtimeKeyFile,
+        profileName: "codexweb-council",
+        alias: "codexweb-council",
+      });
 
   const config: AppConfig = {
     ...base,
