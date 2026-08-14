@@ -14,7 +14,8 @@ async function main(): Promise<void> {
     commandIndex = 2;
   }
 
-  if (args[commandIndex] === "council-setup") {
+  const command = args[commandIndex];
+  if (command === "council-setup") {
     await runCouncilSetupCommand(args.slice(commandIndex + 1));
     return;
   }
