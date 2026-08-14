@@ -2,6 +2,8 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 
+const OWNER_REQUEST_TIMEOUT_MS = 8_000;
+
 function configRoot() {
   const override = process.env.CODEX_CHATGPT_WEB_HOME?.trim();
   return override ? path.resolve(override) : path.join(os.homedir(), ".codex-chatgpt-web");
@@ -32,19 +34,31 @@ function assertConversationUrl(raw) {
   return url.toString();
 }
 
-async function bindCurrentConversationAsLead({ conversationUrl, projectName }) {
+async function bindCurrentConversationAsLead({ conversationUrl, projectName }, options = {}) {
   const { endpoint, token } = readOwnerDescriptor();
-  const response = await fetch(`${endpoint}/start-lead`, {
-    method: "POST",
-    headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
-    body: JSON.stringify({
-      conversation_url: assertConversationUrl(conversationUrl),
-      project_name: String(projectName || "ChatGPT Project").trim().slice(0, 160) || "ChatGPT Project",
-    }),
-  });
-  const value = await response.json().catch(() => ({}));
-  if (!response.ok || value?.ok !== true) throw new Error(typeof value?.error === "string" ? value.error : `Council owner control HTTP ${response.status}`);
-  return value.result;
+  const fetchImpl = options.fetchImpl || globalThis.fetch;
+  if (typeof fetchImpl !== "function") throw new Error("Council owner-control fetch is unavailable");
+  const timeoutMs = Number.isFinite(options.timeoutMs) ? Math.max(100, Math.min(30_000, Math.trunc(options.timeoutMs))) : OWNER_REQUEST_TIMEOUT_MS;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(new Error("Council owner-control request timed out")), timeoutMs);
+  timer.unref?.();
+  try {
+    const response = await fetchImpl(`${endpoint}/start-lead`, {
+      method: "POST",
+      redirect: "error",
+      signal: controller.signal,
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      body: JSON.stringify({
+        conversation_url: assertConversationUrl(conversationUrl),
+        project_name: String(projectName || "ChatGPT Project").trim().slice(0, 160) || "ChatGPT Project",
+      }),
+    });
+    const value = await response.json().catch(() => ({}));
+    if (!response.ok || value?.ok !== true) throw new Error(typeof value?.error === "string" ? value.error : `Council owner control HTTP ${response.status}`);
+    return value.result;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
-module.exports = { assertConversationUrl, bindCurrentConversationAsLead, ownerDescriptorPath, readOwnerDescriptor };
+module.exports = { OWNER_REQUEST_TIMEOUT_MS, assertConversationUrl, bindCurrentConversationAsLead, ownerDescriptorPath, readOwnerDescriptor };
