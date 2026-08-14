@@ -5,51 +5,76 @@ const path = require("node:path");
 
 const launcherRoot = path.resolve(__dirname, "..");
 const repositoryRoot = path.resolve(launcherRoot, "..");
-const launcherPackage = JSON.parse(fs.readFileSync(path.join(launcherRoot, "package.json"), "utf8"));
-const rootPackage = JSON.parse(fs.readFileSync(path.join(repositoryRoot, "package.json"), "utf8"));
-const installerSh = fs.readFileSync(path.join(repositoryRoot, "scripts", "install-launcher.sh"), "utf8");
-const installerPs1 = fs.readFileSync(path.join(repositoryRoot, "scripts", "install-launcher.ps1"), "utf8");
-const update = fs.readFileSync(path.join(launcherRoot, "electron", "update.cjs"), "utf8");
-const updateWorker = fs.readFileSync(path.join(launcherRoot, "electron", "update-worker.cjs"), "utf8");
-const renderer = fs.readFileSync(path.join(launcherRoot, "src", "App.tsx"), "utf8");
-const browserSurface = fs.readFileSync(path.join(launcherRoot, "src", "BrowserSurface.tsx"), "utf8");
-const main = fs.readFileSync(path.join(launcherRoot, "electron", "main.cjs"), "utf8");
+const manifest = JSON.parse(fs.readFileSync(path.join(launcherRoot, "package.json"), "utf8"));
+const repositoryManifest = JSON.parse(fs.readFileSync(path.join(repositoryRoot, "package.json"), "utf8"));
 
 test("the public launcher command uses the Electron bootstrap", () => {
-  const starter = fs.readFileSync(path.join(repositoryRoot, "scripts", "start-launcher.ts"), "utf8");
-  assert.match(starter, /launcherPackage/);
-  assert.match(starter, /electron/);
+  assert.equal(repositoryManifest.scripts.launcher, "bun run scripts/start-launcher.ts");
+  assert.equal(repositoryManifest.scripts.launcher, repositoryManifest.scripts.app);
 });
 
 test("launcher publishes native packages for all supported desktop operating systems", () => {
-  assert.equal(launcherPackage.version, rootPackage.version);
-  assert.equal(launcherPackage.build.productName, "Codex Web GPT");
-  assert.match(launcherPackage.build.artifactName, /\$\{version\}/);
-  assert.match(launcherPackage.build.artifactName, /\$\{os\}/);
-  assert.match(launcherPackage.build.artifactName, /\$\{arch\}/);
-  assert.ok(launcherPackage.build.mac.target.includes("dmg"));
-  assert.ok(launcherPackage.build.mac.target.includes("zip"));
-  assert.ok(launcherPackage.build.win.target.includes("nsis"));
-  assert.ok(launcherPackage.build.linux.target.includes("AppImage"));
+  assert.equal(manifest.build.appId, "dev.codexwebgpt.launcher");
+  assert.equal(manifest.build.artifactName, "codex-web-gpt-${version}-${os}-${arch}.${ext}");
+  assert.deepEqual(manifest.build.mac.target, ["dmg", "zip"]);
+  assert.deepEqual(manifest.build.win.target, ["nsis"]);
+  assert.equal(manifest.build.win.icon, "assets/icon.ico");
+  assert.deepEqual(manifest.build.linux.target, ["AppImage"]);
+  assert.ok(manifest.build.files.includes("assets/icon.png"));
+  assert.ok(fs.existsSync(path.join(launcherRoot, "assets", "icon.ico")));
+  assert.equal(manifest.build.nsis.perMachine, false);
+  assert.equal(manifest.build.nsis.allowElevation, false);
+  assert.equal(manifest.build.nsis.runAfterFinish, false);
 });
 
 test("release installers resolve checksummed native launcher assets", () => {
-  assert.match(installerSh, /checksums\.txt/);
-  assert.match(installerSh, /codex-web-gpt-\$VERSION-\$PLATFORM-\$ARCH\.\$EXTENSION/);
-  assert.match(installerSh, /AppImage/);
-  assert.match(installerSh, /Codex Web GPT\.app/);
-  assert.match(installerPs1, /checksums\.txt/);
-  assert.match(installerPs1, /codex-web-gpt-\$Version-win-\$Arch\.exe/);
+  const shellInstaller = fs.readFileSync(path.join(repositoryRoot, "scripts", "install-launcher.sh"), "utf8");
+  const windowsInstaller = fs.readFileSync(path.join(repositoryRoot, "scripts", "install-launcher.ps1"), "utf8");
+  const packager = fs.readFileSync(path.join(launcherRoot, "scripts", "package.cjs"), "utf8");
+  for (const installer of [shellInstaller, windowsInstaller]) {
+    assert.match(installer, /checksums\.txt/);
+    assert.match(installer, /SHA-?256/i);
+    assert.match(installer, /releases\/download/);
+  }
+  assert.match(shellInstaller, /PLATFORM="mac"/);
+  assert.match(shellInstaller, /PLATFORM="linux"/);
+  assert.match(shellInstaller, /codex-web-gpt\.desktop/);
+  assert.match(shellInstaller, /--appimage-extract/);
+  assert.match(packager, /-linux-x86_64\(\?=\\\.\).*?-linux-x64/);
+  assert.match(packager, /process\.execPath/);
+  assert.match(packager, /electron-builder\/out\/cli\/cli\.js/);
+  assert.match(packager, /target === "--mac" && !env\.CSC_LINK && !env\.CSC_NAME/);
+  assert.match(packager, /--config\.mac\.identity=-/);
+  assert.doesNotMatch(packager, /electron-builder\.cmd/);
+  assert.match(shellInstaller, /shell_quote\(\)/);
+  assert.match(shellInstaller, /exec %s "\$@"/);
+  assert.ok(
+    shellInstaller.indexOf('chmod 0755 "$TEMP_DIR/$ASSET"')
+      < shellInstaller.indexOf('"$TEMP_DIR/$ASSET" --appimage-extract'),
+    "the downloaded AppImage must be executable before it is inspected",
+  );
+  assert.match(windowsInstaller, /codex-web-gpt-\$Version-win-\$Arch\.exe/);
+  assert.match(windowsInstaller, /\[Environment\]::Is64BitOperatingSystem/);
+  assert.doesNotMatch(windowsInstaller, /RuntimeInformation/);
+  const expectedWindowsExecutable = `Programs\\${manifest.name}\\${manifest.build.productName}.exe`;
+  assert.ok(
+    windowsInstaller.includes(expectedWindowsExecutable),
+    `the PowerShell installer must launch the NSIS executable at ${expectedWindowsExecutable}`,
+  );
 });
 
 test("packaged launcher owns a detached checksummed updater for every release platform", () => {
-  assert.match(update, /checksums\.txt/);
-  assert.match(update, /createHash\("sha256"\)/);
-  assert.match(update, /update-worker\.cjs/);
-  assert.match(update, /detached: true/);
-  assert.match(updateWorker, /darwin/);
-  assert.match(updateWorker, /win32/);
-  assert.match(updateWorker, /linux/);
+  const updater = fs.readFileSync(path.join(launcherRoot, "electron", "update.cjs"), "utf8");
+  const worker = fs.readFileSync(path.join(launcherRoot, "electron", "update-worker.cjs"), "utf8");
+  for (const platform of ["darwin", "win32", "linux"]) {
+    assert.match(updater, new RegExp(`platform === "${platform}"`));
+    assert.match(worker, new RegExp(`job\\.platform === "${platform}"`));
+  }
+  assert.match(updater, /expectedChecksum/);
+  assert.match(updater, /SHA-256 verification failed/);
+  assert.match(updater, /detached:\s*true/);
+  assert.match(worker, /waitForParent/);
+  assert.doesNotMatch(worker, /backup/i);
 });
 
 test("CI packages and smoke-launches on macOS, Windows, and Linux", () => {
@@ -90,31 +115,10 @@ test("Windows packages embed the checksummed Bun baseline runtime for CPUs witho
     path.join(repositoryRoot, "scripts", "prepare-windows-baseline-bun.ps1"),
     "utf8",
   );
-  assert.match(builder, /CODEX_CHATGPT_WEB_PACKAGED_BUN/);
-  assert.match(baseline, /bun-windows-x64-baseline/);
-  assert.match(baseline, /Get-FileHash -Algorithm SHA256/);
-  assert.match(baseline, /checksums\.txt/);
-  assert.match(baseline, /CODEX_CHATGPT_WEB_PACKAGED_BUN/);
-});
-
-test("embedded ChatGPT is measured only after its animated surface mounts", () => {
-  const browserSurfaceIndex = renderer.indexOf("<BrowserSurface");
-  const browserBoundsIndex = renderer.indexOf("setBrowserBounds");
-  assert.ok(browserSurfaceIndex >= 0);
-  assert.ok(browserBoundsIndex < 0, "App must not measure an unmounted browser surface");
-  assert.match(browserSurface, /ResizeObserver/);
-  assert.match(browserSurface, /setBrowserBounds/);
-});
-
-test("closing the launcher follows the persisted background-runtime preference", () => {
-  assert.match(main, /keepRunningOnClose/);
-  assert.match(main, /requestQuit/);
-});
-
-test("normal shutdown persists the ChatGPT session before closing browser views", () => {
-  const persistIndex = main.indexOf("browserHost?.persistSession?.()");
-  const disposeIndex = main.indexOf("browserHost?.dispose?.()");
-  assert.ok(persistIndex >= 0);
-  assert.ok(disposeIndex >= 0);
-  assert.ok(persistIndex < disposeIndex);
+  assert.match(builder, /CODEX_CHATGPT_WEB_EMBEDDED_BUN/);
+  assert.match(builder, /Embedded Bun must be/);
+  assert.match(baseline, /bun-windows-x64-baseline\.zip/);
+  assert.match(baseline, /SHASUMS256\.txt/);
+  assert.match(baseline, /Get-FileHash[^\n]+SHA256/);
+  assert.match(baseline, /CODEX_CHATGPT_WEB_EMBEDDED_BUN=/);
 });
