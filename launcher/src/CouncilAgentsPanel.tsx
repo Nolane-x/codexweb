@@ -10,6 +10,10 @@ function managedSnapshot(runtime: CouncilRuntimeViewState | null): ManagedCounci
   return null;
 }
 
+function shortCommit(value: string): string {
+  return value.length > 12 ? value.slice(0, 12) : value;
+}
+
 export function CouncilAgentsPanel() {
   const [open, setOpen] = useState(false);
   const [runtime, setRuntime] = useState<CouncilRuntimeViewState | null>(null);
@@ -33,6 +37,7 @@ export function CouncilAgentsPanel() {
   }, []);
 
   const managed = managedSnapshot(runtime);
+  const workspace = managed?.project?.workspace;
   const sharedLive = runtime?.projection.syncState === "live";
   const sharedStale = runtime?.projection.syncState === "stale";
   const managedProject = runtime?.managedProject;
@@ -77,11 +82,20 @@ export function CouncilAgentsPanel() {
             <button onClick={() => setOpen(false)} aria-label="Close managed agents">×</button>
           </header>
           {managed?.project ? (
-            <div className="council-agents-project">
-              <span>#{managed.project.roomId}</span>
-              <p>{managed.project.mission}</p>
-              <small>Lead · {managed.project.leadAgentId}</small>
-            </div>
+            <>
+              <div className="council-agents-project">
+                <span>#{managed.project.roomId}</span>
+                <p>{managed.project.mission}</p>
+                <small>Lead · {managed.project.leadAgentId}</small>
+              </div>
+              {workspace ? (
+                <div className="council-agents-project">
+                  <span>GitHub workspace</span>
+                  <p>{workspace.owner}/{workspace.name}</p>
+                  <small>{workspace.defaultBranch} · pinned {shortCommit(workspace.baseCommit)}</small>
+                </div>
+              ) : null}
+            </>
           ) : (
             <div className="council-agents-empty">
               <strong>Start with your current ChatGPT conversation</strong>
