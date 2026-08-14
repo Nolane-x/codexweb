@@ -29,7 +29,7 @@ export function createLauncherPersistentTurnControl(
   return {
     async start(input: { traceId: string; bindingKey: string }) {
       const value = await request("/v1/turn/start", { phase: "start", traceId: input.traceId, helperPid: process.pid, bindingKey: input.bindingKey });
-      if (typeof value.surfaceId !== "string" || !/^[A-Za-z0-9_-]{32}$/.test(value.surfaceId)) throw new Error("launcher returned invalid surfaceId");
+      if (typeof value.surfaceId !== "string" || !/^[A-Za-z0-9_-]{24,64}$/.test(value.surfaceId)) throw new Error("launcher returned invalid surfaceId");
       return { surfaceId: value.surfaceId };
     },
     async heartbeat(input: { traceId: string }) { await request("/v1/turn/heartbeat", { phase: "heartbeat", traceId: input.traceId, helperPid: process.pid }); },
