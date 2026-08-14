@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { CouncilRuntimeViewState, CouncilSharedStateView, CouncilTaskView } from "./types";
+import type { CouncilRuntimeViewState, CouncilSharedStateView, CouncilTaskView, CouncilWakeStatusView } from "./types";
 
 function timeLabel(value?: string): string {
   if (!value) return "";
@@ -14,6 +14,11 @@ function initials(name: string): string {
 
 function shortStatus(value: CouncilTaskView["status"]): string {
   return value.replaceAll("_", " ");
+}
+
+function wakeStatusLabel(value: CouncilWakeStatusView): string {
+  const canonical = value === "pending" ? "queued" : value === "delivering" ? "target-running" : value === "acknowledged" ? "replied" : value;
+  return canonical.replaceAll("-", " ");
 }
 
 function CouncilLogo() {
@@ -212,7 +217,28 @@ export function CouncilDock() {
                     })}
                   </div>
                 </section>
-                <section className="council-intel-section"><div className="council-pane-heading"><span>Wake activity</span><small>{wakeActivity.length}</small></div>{wakeActivity.length === 0 ? <p className="council-muted">No wakes in this snapshot.</p> : wakeActivity.map(wake => <div className={`council-intel-card wake ${wake.status}`} key={wake.id}><div><strong>Wake {agentsById.get(wake.targetAgentId)?.name ?? wake.targetAgentId}</strong><span className="council-status-tag">{wake.status}</span></div><p>{wake.reason}</p>{wake.expiresAt && <small>expires {timeLabel(wake.expiresAt)}</small>}{wake.lastError && <small>{wake.lastError}</small>}</div>)}</section>
+                <section className="council-intel-section">
+                  <div className="council-pane-heading"><span>Wake activity</span><small>{wakeActivity.length}</small></div>
+                  {wakeActivity.length === 0 ? <p className="council-muted">No wakes in this snapshot.</p> : wakeActivity.map(wake => (
+                    <div className={`council-intel-card wake ${wake.status}`} key={wake.id}>
+                      <div><strong>Wake {agentsById.get(wake.targetAgentId)?.name ?? wake.targetAgentId}</strong><span className="council-status-tag">{wakeStatusLabel(wake.status)}</span></div>
+                      <p>{wake.reason}</p>
+                      {(wake.transitions?.length ?? 0) > 0 && (
+                        <div className="council-wake-timeline" aria-label="Wake transition timeline">
+                          {wake.transitions!.map((transition, index) => (
+                            <span className={`council-wake-step ${transition.status}`} key={`${transition.at}-${index}`}>
+                              <i aria-hidden="true" />
+                              <b>{wakeStatusLabel(transition.status)}</b>
+                              <time>{timeLabel(transition.at)}</time>
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                      {wake.expiresAt && <small>expires {timeLabel(wake.expiresAt)}</small>}
+                      {wake.lastError && <small>{wake.lastError}</small>}
+                    </div>
+                  ))}
+                </section>
                 <section className="council-intel-section"><div className="council-pane-heading"><span>Active work</span><small>{activeTasks.length}</small></div>{activeTasks.length === 0 ? <p className="council-muted">No active tasks.</p> : activeTasks.map(task => <div className={`council-intel-card task ${task.status}`} key={task.id}><div><strong>{task.title}</strong><span className="council-status-tag">{shortStatus(task.status)}</span></div><p>{task.description}</p>{task.assigneeAgentId && <small>→ {agentsById.get(task.assigneeAgentId)?.name ?? task.assigneeAgentId}</small>}</div>)}</section>
                 <section className="council-intel-section"><div className="council-pane-heading"><span>Decisions</span><small>{decisions.length}</small></div>{decisions.length === 0 ? <p className="council-muted">No final policy yet.</p> : decisions.map(decision => <div className="council-intel-card decision" key={decision.id}><strong>{decision.title}</strong><p>{decision.policy}</p>{decision.unresolvedRisks.length > 0 && <small>{decision.unresolvedRisks.length} unresolved risk{decision.unresolvedRisks.length === 1 ? "" : "s"}</small>}</div>)}</section>
               </div>
