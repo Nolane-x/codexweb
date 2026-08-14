@@ -79,3 +79,38 @@ test("canonical runtime transitions are durably ordered and dispatch increments 
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("expired wakes are durably reaped once and stop consuming capacity, decision gates and resurrection context", () => {
+  const root = mkdtempSync(join(tmpdir(), "council-wake-expiry-vnext-"));
+  const statePath = join(root, "state.json");
+  try {
+    const store = new CouncilStore(statePath);
+    store.joinAgent({ id: "alice", name: "Alice", role: "Architect" });
+    store.joinAgent({ id: "bob", name: "Bob", role: "Reviewer" });
+    store.ensureRoom({ id: "nolane", name: "Nolane", mission: "Review wake lifecycle" });
+    store.say({ roomId: "nolane", authorAgentId: "bob", kind: "proposal", body: "Ship after review" });
+
+    const wake = store.wake({ targetAgentId: "alice", roomId: "nolane", reason: "Review before TTL" }) as any;
+    const afterExpiry = new Date(Date.parse(wake.expiresAt) + 1).toISOString();
+
+    expect((store as any).expireWakes(afterExpiry)).toBe(1);
+    expect((store as any).expireWakes(afterExpiry)).toBe(0);
+
+    const expired = store.snapshot().wakes.find(item => item.id === wake.id) as any;
+    expect(expired.status).toBe("expired");
+    expect(expired.transitions.map((transition: any) => transition.status)).toEqual(["queued", "expired"]);
+    expect(councilWakeCapacity(store.snapshot().wakes, "alice")).toEqual({ active: 0, max: 2, available: 2 });
+    expect(evaluateCouncilDecisionGate(store.snapshot(), "nolane").ready).toBe(true);
+    expect(store.buildContextPacket({ agentId: "alice", roomId: "nolane" }).wake).toBeUndefined();
+
+    store.wake({ targetAgentId: "alice", roomId: "nolane", reason: "Replacement review A" });
+    store.wake({ targetAgentId: "alice", roomId: "nolane", reason: "Replacement review B" });
+    expect(councilWakeCapacity(store.snapshot().wakes, "alice")).toEqual({ active: 2, max: 2, available: 0 });
+
+    const restored = new CouncilStore(statePath).snapshot().wakes.find(item => item.id === wake.id) as any;
+    expect(restored.status).toBe("expired");
+    expect(restored.transitions.filter((transition: any) => transition.status === "expired")).toHaveLength(1);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
