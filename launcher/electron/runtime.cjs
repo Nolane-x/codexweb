@@ -40,7 +40,7 @@ class RuntimeHost extends legacy.RuntimeHost {
     }
   }
 
-  setupMcp({ tunnelId = "", runtimeKey = "", replace = false } = {}) {
+  setupCouncilMcp({ tunnelId = "", runtimeKey = "", replace = false } = {}) {
     if (this.currentOperation()) throw new Error(`Another launcher operation is active: ${this.currentOperation()}`);
     const reuseSavedCredentials = replace !== true && this.mcpCredentialsConfigured();
     if (!reuseSavedCredentials && !/^tunnel_[a-f0-9]{32}$/.test(tunnelId)) {
@@ -74,7 +74,7 @@ class RuntimeHost extends legacy.RuntimeHost {
     if (!this.isCouncilRuntime()) return super.upgradeManagedRuntime();
     const existing = this.runtimeConfigSnapshot();
     if (existing.config?.releaseVersion === this.app.getVersion()) return { updated: false };
-    const result = await this.setupMcp({ replace: false });
+    const result = await this.setupCouncilMcp({ replace: false });
     return {
       updated: true,
       mode: "full",
