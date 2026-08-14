@@ -16,6 +16,16 @@ function protocol(agent: ManagedAgentRecord, roomId: string): string {
   ].join("\n");
 }
 
+function unfinishedCommitments(agentId: string, tasks: unknown[]): unknown[] {
+  const unfinished = new Set(["todo", "claimed", "in_progress", "review", "blocked"]);
+  return tasks.filter(task => {
+    if (!task || typeof task !== "object" || Array.isArray(task)) return false;
+    const value = task as Record<string, unknown>;
+    if (typeof value.status !== "string" || !unfinished.has(value.status)) return false;
+    return value.assigneeAgentId === undefined || value.assigneeAgentId === agentId;
+  });
+}
+
 export function buildAgentBootstrapPrompt(agent: ManagedAgentRecord, input: { projectMission: string; roomId: string }): string {
   return [
     protocol(agent, input.roomId),
@@ -39,6 +49,7 @@ export function buildAgentResurrectionPrompt(agent: ManagedAgentRecord, input: {
     roomId: input.roomId,
     wakeReason: input.wakeReason,
     checkpoint: input.checkpoint,
+    unfinishedCommitments: unfinishedCommitments(agent.id, input.tasks),
     recentMessages: input.recentMessages,
     decisions: input.decisions,
     tasks: input.tasks,
@@ -46,7 +57,7 @@ export function buildAgentResurrectionPrompt(agent: ManagedAgentRecord, input: {
   return [
     protocol(agent, input.roomId),
     "",
-    "You are resuming after sleep or a lost ChatGPT conversation. Restore continuity from the data block, then respond to the wake reason.",
+    "You are resuming after sleep or a lost ChatGPT conversation. Restore continuity from the data block, prioritize unfinished commitments assigned to you, then respond to the wake reason.",
     "<untrusted_council_data>",
     JSON.stringify(data, null, 2),
     "</untrusted_council_data>",
