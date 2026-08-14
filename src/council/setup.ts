@@ -8,13 +8,13 @@ import {
   saveConfig,
   type AppConfig,
 } from "../config";
-import { uninstallCodexIntegration } from "../codex-integration";
 import {
   createTunnelConfig,
   installRuntimeKey,
   installTunnelClient,
 } from "../tunnel";
 import { VERSION } from "../version";
+import { removeManagedCodexRoute } from "./codex-route-removal";
 import { COUNCIL_CONNECTOR_NAME } from "./wake-engine";
 
 export interface CouncilSetupOptions {
@@ -63,7 +63,7 @@ export async function setupCouncil(options: CouncilSetupOptions): Promise<Counci
     : base.tunnel!;
 
   // The Council product must not leave the old Codex model route active.
-  const removed = uninstallCodexIntegration();
+  const removed = removeManagedCodexRoute();
   const config: AppConfig = {
     ...base,
     version: 3,
