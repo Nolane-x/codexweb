@@ -1,4 +1,5 @@
 import * as z from "zod/v4";
+import type { CouncilPermission } from "./managed-agent-state";
 import type { CouncilWakeEvent } from "./types";
 
 export const agentIdSchema = z.string().trim().min(1).max(64).regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/);
@@ -9,6 +10,10 @@ export const bodySchema = z.string().trim().min(1).max(24_000);
 export const actorSchema = { agent_id: agentIdSchema, agent_token: agentTokenSchema };
 export type ResolveCouncilActor = (extra: unknown, explicit?: string, token?: string) => string;
 export interface CouncilWakeDelivery { enqueue(wake: CouncilWakeEvent): void; }
+export interface CouncilManagedMcpAuthorizer {
+  authorizeManaged(agentId: string, permission: CouncilPermission): void;
+  authorizeManagedTaskUpdate(agentId: string, taskId: string, assigneeAgentId?: string): void;
+}
 
 export function assertAgentTokenNotExposed(agentToken: string, values: readonly unknown[]): void {
   const visit = (value: unknown): boolean => {
