@@ -1,8 +1,15 @@
+import type { PublicManagedAgent } from "./managed-runtime";
+import type { ManagedCouncilProject } from "./managed-project-state";
 import { CouncilStore } from "./store";
 import type { CouncilAgent, CouncilDecision, CouncilMessage, CouncilRoom, CouncilTask, CouncilWakeEvent } from "./types";
 
 export const COUNCIL_HTTP_HOST = "127.0.0.1";
 export const COUNCIL_HTTP_DEFAULT_PORT = 17_842;
+
+export interface CouncilManagedPublicView {
+  project: ManagedCouncilProject | null;
+  agents: PublicManagedAgent[];
+}
 
 export interface CouncilPublicSnapshot {
   version: 1;
@@ -13,9 +20,10 @@ export interface CouncilPublicSnapshot {
   decisions: CouncilDecision[];
   tasks: CouncilTask[];
   wakes: CouncilWakeEvent[];
+  managed: CouncilManagedPublicView | null;
 }
 
-export function buildCouncilPublicSnapshot(store: CouncilStore): CouncilPublicSnapshot {
+export function buildCouncilPublicSnapshot(store: CouncilStore, managed: CouncilManagedPublicView | null = null): CouncilPublicSnapshot {
   const state = store.snapshot();
   return {
     version: 1,
@@ -26,6 +34,7 @@ export function buildCouncilPublicSnapshot(store: CouncilStore): CouncilPublicSn
     decisions: state.decisions.slice(-120),
     tasks: state.tasks.slice(-300),
     wakes: state.wakes.slice(-160),
+    managed: managed ? structuredClone(managed) : null,
   };
 }
 
@@ -35,9 +44,7 @@ function allowedRendererOrigin(request: Request): string | undefined {
   if (!origin) return undefined;
   try {
     const url = new URL(origin);
-    if ((url.protocol === "http:" || url.protocol === "https:") && (url.hostname === "127.0.0.1" || url.hostname === "localhost")) {
-      return origin;
-    }
+    if ((url.protocol === "http:" || url.protocol === "https:") && (url.hostname === "127.0.0.1" || url.hostname === "localhost")) return origin;
   } catch {}
   return undefined;
 }
@@ -59,7 +66,10 @@ function configuredPort(): number {
   return value;
 }
 
-export function startCouncilHttpServer(store: CouncilStore, options: { port?: number; onError?: (message: string) => void } = {}): ReturnType<typeof Bun.serve> | undefined {
+export function startCouncilHttpServer(
+  store: CouncilStore,
+  options: { port?: number; onError?: (message: string) => void; managedSnapshot?: () => CouncilManagedPublicView | null } = {},
+): ReturnType<typeof Bun.serve> | undefined {
   const port = options.port ?? configuredPort();
   try {
     return Bun.serve({
@@ -75,7 +85,12 @@ export function startCouncilHttpServer(store: CouncilStore, options: { port?: nu
           return new Response(null, { status: 204, headers: { ...responseHeaders(origin), "access-control-allow-methods": "GET, OPTIONS", "access-control-allow-headers": "content-type" } });
         }
         if (request.method === "GET" && url.pathname === "/health") return Response.json({ ok: true, product: "codexweb-council", port }, { headers: responseHeaders(origin) });
-        if (request.method === "GET" && url.pathname === "/api/state") return Response.json(buildCouncilPublicSnapshot(store), { headers: responseHeaders(origin) });
+        if (request.method === "GET" && url.pathname === "/api/state") {
+          let managed: CouncilManagedPublicView | null = null;
+          try { managed = options.managedSnapshot?.() ?? null; }
+          catch (error) { options.onError?.(`managed snapshot unavailable: ${error instanceof Error ? error.message : String(error)}`); }
+          return Response.json(buildCouncilPublicSnapshot(store, managed), { headers: responseHeaders(origin) });
+        }
         return new Response("Not found", { status: 404, headers: responseHeaders(origin, "text/plain; charset=utf-8") });
       },
     });
