@@ -12,6 +12,27 @@ const expectedVersion = launcherManifest.version;
 const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "codex-web-gpt-package-smoke-"));
 const markerPath = path.join(scratch, "ready.json");
 const coreHome = path.join(scratch, "core-home");
+const launcherData = path.join(scratch, "launcher-data");
+
+function boundedTail(filePath, maxChars = 6_000) {
+  try {
+    if (!fs.existsSync(filePath)) return "missing";
+    const text = fs.readFileSync(filePath, "utf8");
+    return text.slice(-maxChars).replace(/\s+$/g, "") || "empty";
+  } catch (error) {
+    return `unreadable:${error instanceof Error ? error.message : String(error)}`;
+  }
+}
+
+function smokeDiagnostics(result) {
+  return [
+    `marker=${boundedTail(markerPath, 2_000)}`,
+    `stdout=${JSON.stringify(result.stdout?.slice(-4_000) || "")}`,
+    `stderr=${JSON.stringify(result.stderr?.slice(-4_000) || "")}`,
+    `launcherLog=${boundedTail(path.join(launcherData, "logs", "launcher.jsonl"))}`,
+    `processLog=${boundedTail(path.join(launcherData, "logs", "process-stream-errors.log"))}`,
+  ].join("\n");
+}
 
 function run(command, args, options = {}) {
   const result = spawnSync(command, args, {
@@ -21,10 +42,12 @@ function run(command, args, options = {}) {
     timeout: options.timeout || 45_000,
     windowsHide: true,
   });
-  if (result.error) throw result.error;
+  if (result.error) {
+    throw new Error(`${result.error.message}\n${smokeDiagnostics(result)}`);
+  }
   if (result.status !== 0) {
     throw new Error(
-      `${command} failed with status ${result.status}: ${result.stderr?.trim() || result.stdout?.trim() || "no output"}`,
+      `${command} failed with status ${result.status}: ${result.stderr?.trim() || result.stdout?.trim() || "no output"}\n${smokeDiagnostics(result)}`,
     );
   }
 }
@@ -42,7 +65,7 @@ function artifact(pattern, label) {
 function smokeEnvironment() {
   return {
     ...process.env,
-    CODEX_WEB_GPT_LAUNCHER_DATA_DIR: path.join(scratch, "launcher-data"),
+    CODEX_WEB_GPT_LAUNCHER_DATA_DIR: launcherData,
     CODEX_CHATGPT_WEB_HOME: coreHome,
     CODEX_HOME: path.join(scratch, "codex-home"),
     CODEX_WEB_GPT_SMOKE_FILE: markerPath,
