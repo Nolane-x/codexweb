@@ -5,8 +5,9 @@ const MAX_BODY_BYTES = 16 * 1024;
 
 function parseCouncilTurnStart(body) {
   if (!body || typeof body !== "object" || Array.isArray(body)) throw new Error("turn start body is invalid");
-  const allowed = new Set(["traceId", "helperPid", "bindingKey"]);
+  const allowed = new Set(["phase", "traceId", "helperPid", "bindingKey"]);
   for (const key of Object.keys(body)) if (!allowed.has(key)) throw new Error(`unknown turn-start field: ${key}`);
+  if (body.phase !== undefined && body.phase !== "start") throw new Error("turn start phase is invalid");
   if (!/^[A-Za-z0-9_-]{6,128}$/.test(body.traceId || "")) throw new Error("traceId is invalid");
   if (!Number.isInteger(body.helperPid) || body.helperPid < 1) throw new Error("browser helper pid is invalid");
   if (body.bindingKey !== undefined && (typeof body.bindingKey !== "string" || !BINDING_KEY.test(body.bindingKey))) throw new Error("bindingKey is invalid");
