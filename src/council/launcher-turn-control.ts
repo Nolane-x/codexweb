@@ -1,8 +1,13 @@
 import { readLauncherBrowserHostDescriptor } from "../launcher-browser-host";
 
+export type CouncilControlFetch = (
+  input: string | URL | Request,
+  init?: RequestInit,
+) => Promise<Response>;
+
 export interface LauncherPersistentTurnControlDeps {
   readDescriptor: (path: string) => { control: { endpoint: string; token: string } };
-  fetchImpl: typeof fetch;
+  fetchImpl: CouncilControlFetch;
 }
 
 export function createLauncherPersistentTurnControl(
