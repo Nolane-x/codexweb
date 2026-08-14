@@ -39,24 +39,25 @@ for DOC in LICENSE Bun-1.3.14.md THIRD_PARTY_NOTICES.txt; do
 done
 
 mkdir -p "$LIB_DIR" "$BIN_DIR" "$DOC_DIR"
-rm -rf "$STAGE_DIR"
-mkdir -p "$STAGE_DIR"
+mkdir "$STAGE_DIR"
 tar -xzf "$TEMP_DIR/$ASSET" -C "$STAGE_DIR"
-
-if [ ! -x "$STAGE_DIR/bin/codex-chatgpt-web" ]; then echo "Release archive is missing bin/codex-chatgpt-web" >&2; exit 1; fi
-if [ "$("$STAGE_DIR/bin/bun" --version)" != "1.3.14" ]; then echo "Release archive does not contain Bun 1.3.14" >&2; exit 1; fi
+if [ ! -x "$STAGE_DIR/bin/codex-chatgpt-web" ] || [ ! -x "$STAGE_DIR/runtime/bun" ]; then echo "Runtime archive is incomplete" >&2; exit 1; fi
+if [ "$("$STAGE_DIR/bin/codex-chatgpt-web" --version)" != "$VERSION" ]; then echo "Runtime archive version does not match $VERSION" >&2; exit 1; fi
 
 if [ -e "$TARGET_DIR" ]; then mv "$TARGET_DIR" "$BACKUP_DIR"; fi
 if ! mv "$STAGE_DIR" "$TARGET_DIR"; then
-  [ -e "$BACKUP_DIR" ] && mv "$BACKUP_DIR" "$TARGET_DIR"
+  if [ -e "$BACKUP_DIR" ]; then mv "$BACKUP_DIR" "$TARGET_DIR"; fi
   exit 1
 fi
-rm -rf "$BACKUP_DIR"
+ln -sfn "$TARGET_DIR/bin/codex-chatgpt-web" "$BIN_DIR/.codex-chatgpt-web.next"
+mv -f "$BIN_DIR/.codex-chatgpt-web.next" "$BIN_DIR/codex-chatgpt-web"
+rm -f "$BIN_DIR/codex-chatgpt-web.legacy-standalone"
+for DOC in LICENSE Bun-1.3.14.md THIRD_PARTY_NOTICES.txt; do install -m 0644 "$TEMP_DIR/$DOC" "$DOC_DIR/$DOC"; done
+if [ -e "$BACKUP_DIR" ]; then rm -rf "$BACKUP_DIR"; fi
 
-ln -sfn "$TARGET_DIR/bin/codex-chatgpt-web" "$BIN_DIR/codex-chatgpt-web"
-cp "$TEMP_DIR/LICENSE" "$DOC_DIR/LICENSE"
-cp "$TEMP_DIR/Bun-1.3.14.md" "$DOC_DIR/Bun-1.3.14.md"
-cp "$TEMP_DIR/THIRD_PARTY_NOTICES.txt" "$DOC_DIR/THIRD_PARTY_NOTICES.txt"
-
-echo "Installed codex-chatgpt-web $VERSION to $TARGET_DIR"
-echo "Run: $BIN_DIR/codex-chatgpt-web doctor"
+echo "Installed Council runtime $TARGET_DIR"
+if [ "$#" -gt 0 ]; then
+  echo "Council 3.3 no longer performs Codex setup from the runtime installer. Configure the Secure MCP Tunnel from the Electron app." >&2
+  exit 2
+fi
+echo "Next: open the CodexWeb Council Electron app, sign in to ChatGPT, connect the Tunnel, then bind your Project chat as Lead."
