@@ -1,12 +1,16 @@
+import { randomUUID } from "node:crypto";
 import { ownerBearerMatches } from "./owner-control";
 import type { PublicManagedAgent } from "./managed-runtime";
 import type { ManagedCouncilProject } from "./managed-project-state";
 import { CouncilStore } from "./store";
-import type { CouncilAgent, CouncilDecision, CouncilMessage, CouncilRoom, CouncilTask, CouncilWakeEvent } from "./types";
+import type { CouncilAgent, CouncilDecision, CouncilMessage, CouncilRoom, CouncilState, CouncilTask, CouncilWakeEvent } from "./types";
 
 export const COUNCIL_HTTP_HOST = "127.0.0.1";
 export const COUNCIL_HTTP_DEFAULT_PORT = 17_842;
 const OWNER_BODY_LIMIT = 16 * 1024;
+const MAX_SYNC_CURSOR_BYTES = 1_024;
+const DEFAULT_SYNC_WAIT_MS = 15_000;
+const MAX_SYNC_WAIT_MS = 25_000;
 
 export interface CouncilManagedPublicView {
   project: ManagedCouncilProject | null;
@@ -25,16 +29,22 @@ export interface CouncilPublicSnapshot {
   managed: CouncilManagedPublicView | null;
 }
 
+export interface CouncilSyncSnapshotEnvelope {
+  schemaVersion: 1;
+  state: CouncilPublicSnapshot;
+  cursor: string;
+  generatedAt: string;
+}
+
 export interface CouncilOwnerApi {
   token: () => string | undefined;
   startLead: (input: { conversationUrl: string; projectName: string }) => Promise<unknown>;
 }
 
-export function buildCouncilPublicSnapshot(store: CouncilStore, managed: CouncilManagedPublicView | null = null): CouncilPublicSnapshot {
-  const state = store.snapshot();
+function buildCouncilPublicSnapshotFromState(state: CouncilState, managed: CouncilManagedPublicView | null, generatedAt: string): CouncilPublicSnapshot {
   return {
     version: 1,
-    generatedAt: new Date().toISOString(),
+    generatedAt,
     agents: state.agents,
     rooms: state.rooms,
     messages: state.messages.slice(-600),
@@ -43,6 +53,10 @@ export function buildCouncilPublicSnapshot(store: CouncilStore, managed: Council
     wakes: state.wakes.slice(-160),
     managed: managed ? structuredClone(managed) : null,
   };
+}
+
+export function buildCouncilPublicSnapshot(store: CouncilStore, managed: CouncilManagedPublicView | null = null): CouncilPublicSnapshot {
+  return buildCouncilPublicSnapshotFromState(store.snapshot(), managed, new Date().toISOString());
 }
 
 function allowedRendererOrigin(request: Request): string | undefined {
@@ -73,6 +87,27 @@ function configuredPort(): number {
   return value;
 }
 
+function syncWaitMilliseconds(url: URL): number {
+  const raw = url.searchParams.get("wait_ms");
+  if (raw === null || raw === "") return DEFAULT_SYNC_WAIT_MS;
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value < 0) throw new Error("wait_ms must be a non-negative integer");
+  return Math.min(value, MAX_SYNC_WAIT_MS);
+}
+
+function encodeCursor(epoch: string, revision: number): string {
+  return Buffer.from(JSON.stringify({ e: epoch, r: revision }), "utf8").toString("base64url");
+}
+
+function decodeCursor(value: string | null): { epoch: string; revision: number } | undefined {
+  if (!value || Buffer.byteLength(value, "utf8") > MAX_SYNC_CURSOR_BYTES) return undefined;
+  try {
+    const parsed = JSON.parse(Buffer.from(value, "base64url").toString("utf8")) as Record<string, unknown>;
+    if (typeof parsed.e !== "string" || parsed.e.length < 8 || typeof parsed.r !== "number" || !Number.isSafeInteger(parsed.r) || parsed.r < 0) return undefined;
+    return { epoch: parsed.e, revision: parsed.r };
+  } catch { return undefined; }
+}
+
 async function parseOwnerBody(request: Request): Promise<{ conversationUrl: string; projectName: string }> {
   const length = Number(request.headers.get("content-length") ?? "0");
   if (Number.isFinite(length) && length > OWNER_BODY_LIMIT) throw new Error("owner request is too large");
@@ -88,6 +123,33 @@ export function startCouncilHttpServer(
   options: { port?: number; onError?: (message: string) => void; managedSnapshot?: () => CouncilManagedPublicView | null; owner?: CouncilOwnerApi } = {},
 ): ReturnType<typeof Bun.serve> | undefined {
   const port = options.port ?? configuredPort();
+  const syncEpoch = randomUUID();
+
+  const managedView = (): CouncilManagedPublicView | null => {
+    try { return options.managedSnapshot?.() ?? null; }
+    catch (error) {
+      options.onError?.(`managed snapshot unavailable: ${error instanceof Error ? error.message : String(error)}`);
+      return null;
+    }
+  };
+
+  const syncSnapshot = (): CouncilSyncSnapshotEnvelope => {
+    const versioned = store.snapshotWithRevision();
+    const generatedAt = new Date().toISOString();
+    return {
+      schemaVersion: 1,
+      state: buildCouncilPublicSnapshotFromState(versioned.state, managedView(), generatedAt),
+      cursor: encodeCursor(syncEpoch, versioned.revision),
+      generatedAt,
+    };
+  };
+
+  const resyncRequired = (origin?: string) => Response.json({
+    schemaVersion: 1,
+    type: "resync-required",
+    reason: { code: "RESYNC_REQUIRED" },
+  }, { status: 409, headers: responseHeaders(origin) });
+
   try {
     return Bun.serve({
       hostname: COUNCIL_HTTP_HOST,
@@ -123,10 +185,46 @@ export function startCouncilHttpServer(
         }
         if (request.method === "GET" && url.pathname === "/health") return Response.json({ ok: true, product: "codexweb-council", port }, { headers: responseHeaders(origin) });
         if (request.method === "GET" && url.pathname === "/api/state") {
-          let managed: CouncilManagedPublicView | null = null;
-          try { managed = options.managedSnapshot?.() ?? null; }
-          catch (error) { options.onError?.(`managed snapshot unavailable: ${error instanceof Error ? error.message : String(error)}`); }
-          return Response.json(buildCouncilPublicSnapshot(store, managed), { headers: responseHeaders(origin) });
+          return Response.json(buildCouncilPublicSnapshot(store, managedView()), { headers: responseHeaders(origin) });
+        }
+        if (request.method === "GET" && url.pathname === "/api/sync/snapshot") {
+          return Response.json(syncSnapshot(), { headers: responseHeaders(origin) });
+        }
+        if (request.method === "GET" && url.pathname === "/api/sync/next") {
+          const cursor = decodeCursor(url.searchParams.get("after"));
+          const currentRevision = store.currentRevision();
+          if (!cursor || cursor.epoch !== syncEpoch || cursor.revision > currentRevision) return resyncRequired(origin);
+
+          if (cursor.revision < currentRevision) {
+            return Response.json(syncSnapshot(), { headers: responseHeaders(origin) });
+          }
+
+          let waitMs: number;
+          try { waitMs = syncWaitMilliseconds(url); }
+          catch (error) {
+            return Response.json({ schemaVersion: 1, type: "invalid-request", reason: { code: "INVALID_WAIT" } }, { status: 400, headers: responseHeaders(origin) });
+          }
+
+          const changed = await new Promise<boolean>(resolve => {
+            let settled = false;
+            let timer: ReturnType<typeof setTimeout> | undefined;
+            const finish = (value: boolean) => {
+              if (settled) return;
+              settled = true;
+              unsubscribe();
+              if (timer) clearTimeout(timer);
+              request.signal.removeEventListener("abort", onAbort);
+              resolve(value);
+            };
+            const onAbort = () => finish(false);
+            const unsubscribe = store.onMutation(revision => { if (revision !== cursor.revision) finish(true); });
+            request.signal.addEventListener("abort", onAbort, { once: true });
+            if (store.currentRevision() !== cursor.revision) finish(true);
+            else timer = setTimeout(() => finish(false), waitMs);
+          });
+
+          if (!changed) return new Response(null, { status: 204, headers: responseHeaders(origin) });
+          return Response.json(syncSnapshot(), { headers: responseHeaders(origin) });
         }
         return new Response("Not found", { status: 404, headers: responseHeaders(origin, "text/plain; charset=utf-8") });
       },
