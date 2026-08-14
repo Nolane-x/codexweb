@@ -8,6 +8,7 @@ function subscription(channel, listener) {
 
 contextBridge.exposeInMainWorld("codexWebLauncher", {
   snapshot: () => ipcRenderer.invoke("launcher:snapshot"),
+  councilRuntime: () => ipcRenderer.invoke("launcher:council-runtime-snapshot"),
   setLanguage: (language) => ipcRenderer.invoke("launcher:set-language", language),
   openSocial: (target) => ipcRenderer.invoke("launcher:open-social", target),
   completeOnboarding: (language) => ipcRenderer.invoke("launcher:complete-onboarding", language),
@@ -41,6 +42,7 @@ contextBridge.exposeInMainWorld("codexWebLauncher", {
   onWindowStateChanged: (listener) => subscription("launcher:window-state-changed", listener),
   onStateChanged: (listener) => subscription("launcher:state-changed", listener),
   onBrowserState: (listener) => subscription("launcher:browser-state", listener),
+  onCouncilRuntime: (listener) => subscription("launcher:council-runtime", listener),
   onOperation: (listener) => subscription("launcher:operation", listener),
   onLog: (listener) => subscription("launcher:log", listener),
   onUpdateState: (listener) => subscription("launcher:update-state", listener),
