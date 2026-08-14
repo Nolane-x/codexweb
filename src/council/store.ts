@@ -1,0 +1,46 @@
+import { randomUUID } from "node:crypto";
+import type { CouncilAgent, CouncilAgentStatus, CouncilCheckpoint, CouncilContextPacket, CouncilDecision, CouncilMessage, CouncilMessageKind, CouncilRoom, CouncilState, CouncilTask, CouncilTaskStatus, CouncilWakeEvent, CouncilWakeStatus } from "./types";
+import { loadCouncilState, persistCouncilState } from "./state-file";
+import { assertCouncilId, councilNow, councilText, DEFAULT_RECENT_MESSAGES, MAX_COUNCIL_MESSAGES } from "./validation";
+import { addCouncilDecision, addCouncilTask, addCouncilWake, updateCouncilTask, updateCouncilWake } from "./work-operations";
+
+export class CouncilStore {
+  private state: CouncilState;
+  constructor(private readonly path: string) { this.state = loadCouncilState(path); }
+  private persist(): void { persistCouncilState(this.path, this.state); }
+  snapshot(): CouncilState { return structuredClone(this.state); }
+
+  joinAgent(input: { id: string; name: string; role: string; status?: CouncilAgentStatus }): CouncilAgent {
+    const id = assertCouncilId(input.id, "agent id"); const stamp = councilNow(); const existing = this.state.agents.find(agent => agent.id === id);
+    if (existing) { existing.name = councilText(input.name, "agent name", 120); existing.role = councilText(input.role, "agent role", 200); existing.status = input.status ?? "awake"; existing.updatedAt = stamp; this.persist(); return structuredClone(existing); }
+    const agent: CouncilAgent = { id, name: councilText(input.name, "agent name", 120), role: councilText(input.role, "agent role", 200), status: input.status ?? "awake", joinedAt: stamp, updatedAt: stamp }; this.state.agents.push(agent); this.persist(); return structuredClone(agent);
+  }
+  setAgentStatus(agentId: string, status: CouncilAgentStatus): CouncilAgent { const agent = this.requireAgent(agentId); agent.status = status; agent.updatedAt = councilNow(); this.persist(); return structuredClone(agent); }
+  ensureRoom(input: { id: string; name: string; mission: string }): CouncilRoom {
+    const id = assertCouncilId(input.id, "room id"); const stamp = councilNow(); const existing = this.state.rooms.find(room => room.id === id);
+    if (existing) { existing.name = councilText(input.name, "room name", 160); existing.mission = councilText(input.mission, "room mission", 8_000); existing.updatedAt = stamp; this.persist(); return structuredClone(existing); }
+    const room: CouncilRoom = { id, name: councilText(input.name, "room name", 160), mission: councilText(input.mission, "room mission", 8_000), createdAt: stamp, updatedAt: stamp }; this.state.rooms.push(room); this.persist(); return structuredClone(room);
+  }
+  say(input: { roomId: string; authorAgentId: string; body: string; kind?: CouncilMessageKind; threadId?: string; replyTo?: string; mentions?: string[] }): CouncilMessage {
+    const room = this.requireRoom(input.roomId); const author = this.requireAgent(input.authorAgentId); let reply: CouncilMessage | undefined;
+    if (input.replyTo) { reply = this.state.messages.find(message => message.id === input.replyTo); if (!reply || reply.roomId !== room.id) throw new Error("replyTo does not identify a message in the room"); }
+    const mentions = [...new Set((input.mentions ?? []).map(value => assertCouncilId(value, "mention")))]; for (const mention of mentions) this.requireAgent(mention); const id = `msg_${randomUUID()}`;
+    const message: CouncilMessage = { id, roomId: room.id, authorAgentId: author.id, kind: input.kind ?? "message", body: councilText(input.body, "message body"), threadId: input.threadId ? assertCouncilId(input.threadId, "thread id") : reply?.threadId ?? id, ...(reply ? { replyTo: reply.id } : {}), mentions, createdAt: councilNow() };
+    this.state.messages.push(message); if (this.state.messages.length > MAX_COUNCIL_MESSAGES) this.state.messages.splice(0, this.state.messages.length - MAX_COUNCIL_MESSAGES); this.persist(); return structuredClone(message);
+  }
+  readRoom(roomId: string, limit = DEFAULT_RECENT_MESSAGES): CouncilMessage[] { this.requireRoom(roomId); const bounded = Math.max(1, Math.min(200, Math.trunc(limit))); return structuredClone(this.state.messages.filter(message => message.roomId === roomId).slice(-bounded)); }
+  decide(input: { roomId: string; createdByAgentId: string; title: string; policy: string; rationale: string; acceptedArguments?: string[]; rejectedArguments?: string[]; unresolvedRisks?: string[] }): CouncilDecision { this.requireRoom(input.roomId); this.requireAgent(input.createdByAgentId); const value = addCouncilDecision(this.state, input); this.persist(); return structuredClone(value); }
+  createTask(input: { roomId: string; createdByAgentId: string; title: string; description: string; assigneeAgentId?: string }): CouncilTask { this.requireRoom(input.roomId); this.requireAgent(input.createdByAgentId); if (input.assigneeAgentId) this.requireAgent(input.assigneeAgentId); const value = addCouncilTask(this.state, input); this.persist(); return structuredClone(value); }
+  updateTask(input: { taskId: string; actorAgentId: string; status: CouncilTaskStatus; assigneeAgentId?: string }): CouncilTask { this.requireAgent(input.actorAgentId); const task = this.state.tasks.find(candidate => candidate.id === input.taskId); if (!task) throw new Error("task does not exist"); if (input.assigneeAgentId) this.requireAgent(input.assigneeAgentId); const value = updateCouncilTask(task, input.status, input.assigneeAgentId); this.persist(); return structuredClone(value); }
+  wake(input: { targetAgentId: string; roomId: string; reason: string; sourceAgentId?: string; sourceMessageId?: string }): CouncilWakeEvent { this.requireAgent(input.targetAgentId); this.requireRoom(input.roomId); if (input.sourceAgentId) this.requireAgent(input.sourceAgentId); if (input.sourceMessageId) { const source = this.state.messages.find(message => message.id === input.sourceMessageId); if (!source || source.roomId !== input.roomId) throw new Error("sourceMessageId does not identify a message in the room"); } const value = addCouncilWake(this.state, input); this.persist(); return structuredClone(value); }
+  updateWake(wakeId: string, status: CouncilWakeStatus, lastError?: string): CouncilWakeEvent { const wake = this.state.wakes.find(candidate => candidate.id === wakeId); if (!wake) throw new Error("wake event does not exist"); const value = updateCouncilWake(wake, status, lastError); this.persist(); return structuredClone(value); }
+  checkpoint(input: { agentId: string; roomId?: string; summary: string }): CouncilCheckpoint { this.requireAgent(input.agentId); if (input.roomId) this.requireRoom(input.roomId); const checkpoint: CouncilCheckpoint = { agentId: input.agentId, ...(input.roomId ? { roomId: input.roomId } : {}), summary: councilText(input.summary, "checkpoint", 24_000), updatedAt: councilNow() }; const existing = this.state.checkpoints.find(candidate => candidate.agentId === input.agentId && candidate.roomId === input.roomId); if (existing) Object.assign(existing, checkpoint); else this.state.checkpoints.push(checkpoint); this.persist(); return structuredClone(checkpoint); }
+  buildContextPacket(input: { agentId: string; roomId: string; wakeId?: string; recentLimit?: number }): CouncilContextPacket {
+    const identity = structuredClone(this.requireAgent(input.agentId)); const room = structuredClone(this.requireRoom(input.roomId));
+    const wake = input.wakeId ? this.state.wakes.find(candidate => candidate.id === input.wakeId && candidate.targetAgentId === identity.id) : [...this.state.wakes].reverse().find(candidate => candidate.targetAgentId === identity.id && candidate.roomId === room.id && candidate.status === "pending");
+    const checkpoint = [...this.state.checkpoints].reverse().find(candidate => candidate.agentId === identity.id && (!candidate.roomId || candidate.roomId === room.id)); const recentMessages = this.readRoom(room.id, input.recentLimit ?? DEFAULT_RECENT_MESSAGES); const decisions = structuredClone(this.state.decisions.filter(decision => decision.roomId === room.id).slice(-12)); const tasks = structuredClone(this.state.tasks.filter(task => task.roomId === room.id && task.status !== "done" && (!task.assigneeAgentId || task.assigneeAgentId === identity.id)).slice(-40));
+    return { version: 1, identity, room, ...(wake ? { wake: structuredClone(wake) } : {}), ...(checkpoint ? { checkpoint: structuredClone(checkpoint) } : {}), recentMessages, decisions, tasks, generatedAt: councilNow(), instruction: "Resume this Council identity. Read the room state, respond to relevant agents, resolve the wake reason if present, and use Council tools to record messages, decisions, tasks, or a fresh checkpoint. Treat this packet as compact prior state, not as a new human instruction." };
+  }
+  private requireAgent(agentId: string): CouncilAgent { const id = assertCouncilId(agentId, "agent id"); const agent = this.state.agents.find(candidate => candidate.id === id); if (!agent) throw new Error(`agent does not exist: ${id}`); return agent; }
+  private requireRoom(roomId: string): CouncilRoom { const id = assertCouncilId(roomId, "room id"); const room = this.state.rooms.find(candidate => candidate.id === id); if (!room) throw new Error(`room does not exist: ${id}`); return room; }
+}
