@@ -5,6 +5,7 @@ import type { ParsedCouncilActionFooter } from "./browser-actions";
 import { assertCouncilDecisionGate } from "./decision-gate";
 import { COUNCIL_PERMISSIONS, type CouncilPermission, type ManagedAgentRecord, type ManagedAgentStateStore } from "./managed-agent-state";
 import type { ManagedCouncilProject, ManagedProjectStateStore } from "./managed-project-state";
+import type { RepoWorkspaceBinding } from "./repo-workspace";
 import type { CouncilStore } from "./store";
 import type { CouncilWakeEvent } from "./types";
 
@@ -116,6 +117,13 @@ export class CouncilManagedRuntime {
       permissions: [...COUNCIL_PERMISSIONS],
     });
     return { project, lead };
+  }
+
+  bindRepoWorkspace(actorAgentId: string, input: RepoWorkspaceBinding): ManagedCouncilProject {
+    const project = this.requireProject();
+    if (actorAgentId !== project.leadAgentId) throw new Error(`Only the active managed Lead ${project.leadAgentId} can bind repository workspace metadata`);
+    if (!this.council.snapshot().agents.some(agent => agent.id === actorAgentId)) throw new Error(`Council actor does not exist: ${actorAgentId}`);
+    return this.project.bindWorkspace(input);
   }
 
   async spawnAgent(sourceAgentId: string, input: { name: string; role: string; mandate: string; requestedAgentId?: string; permissions?: CouncilPermission[] }): Promise<ManagedAgentRecord> {
