@@ -1,50 +1,188 @@
-# CodexWeb Council
+# CodexWeb Council 3.0
 
-**A local-first collaboration room for multiple normal ChatGPT conversations.**
+**A local-first Electron control center where normal ChatGPT conversations can form a team, deliberate, wake one another, reach a final policy, divide work, and keep persistent conversational state.**
 
-CodexWeb Council lets separate ChatGPT conversations join under stable names and roles, talk in shared rooms, challenge proposals, record final policies, divide implementation work, and wake another participant with a compact continuity packet.
+CodexWeb Council keeps the strongest infrastructure from `miuuyy/codex-chatgpt-web`—the polished Electron launcher, persistent ChatGPT login/browser partition, Secure MCP Tunnel setup, browser worker, diagnostics, packaging, and updater—but replaces Codex model routing as the product core with a ChatGPT Council.
 
-It is built by repurposing the strongest local infrastructure from `miuuyy/codex-chatgpt-web`: the polished Electron launcher, persistent ChatGPT browser/login host, isolated browser surfaces, Secure MCP Tunnel integration, browser worker, diagnostics, and continuity machinery. Council is now the active collaboration product path; Codex model routing is retained only as legacy/compatibility source during migration.
+> Status: experimental research software. The Electron-first Council path is implemented and verified on Linux with the repository's full `bun run verify`, Electron packaging, and packaged-app smoke tests. macOS/Windows packaging remains gated by GitHub Actions on this fork.
 
-> **Status:** research/experimental. The Council core, standalone tunnel runtime, MCP contract, wake/resurrection flow, launcher Council UI, and per-agent capability hardening are implemented. Full end-to-end live multi-conversation wake testing still requires a machine/workspace with the supported ChatGPT custom-MCP write capabilities.
-
-## What it does
+## Architecture
 
 ```text
-               ┌───────────────────────────────┐
-               │       CodexWeb Council        │
-               │  rooms · policy · work state │
-               └──────────────┬────────────────┘
-                              │ Secure MCP Tunnel
-             ┌────────────────┼────────────────┐
-             │                │                │
-        ChatGPT Alice     ChatGPT Bob     ChatGPT Carol
-         Architect          Critic           Builder
-             │                │                │
-             └──── propose / reply / decide ───┘
-                              │
-                         council_wake
-                              │
-                     ChatGPT browser worker
-                              │
-                      resurrection packet
+Normal ChatGPT Project / Lead
+          │
+          ├── OpenAI Secure MCP Tunnel ── Council MCP (when the account/workspace permits it)
+          │
+          └── Electron owner fallback ─── current persistent ChatGPT conversation
+                                         │
+                                         ▼
+┌─────────────────────────────────────────────────────────┐
+│                  CODEXWEB ELECTRON                      │
+│                                                         │
+│  ChatGPT login/browser host     Local Council state     │
+│            │                    rooms / policy / tasks   │
+│            └──────────────┬───────────────┘             │
+│                           ▼                             │
+│                  Managed Agent Runtime                  │
+│                           │                             │
+│          ┌────────────────┼────────────────┐            │
+│          ▼                ▼                ▼            │
+│       Alice            Bob             Carol           │
+│     Architect         Critic           Builder          │
+│          │                │                │            │
+│     persistent normal ChatGPT conversation URLs         │
+│          └──────────── Playwright ──────────┘            │
+└─────────────────────────────────────────────────────────┘
 ```
 
-Each participant has a stable `agent_id`, display name, role, and a private bearer-style `agent_token`. The first successful `council_join` for a new identity issues the token; every later Council call must prove both the ID and token. The shared server stores:
+### Two transports, one Council state
 
-- rooms and room missions
-- threaded messages
-- first-class proposals and objections
-- final decisions with rationale and unresolved risks
-- assigned tasks and task state
-- durable wake events
-- compact private checkpoints for continuity
+- **Secure MCP Tunnel** stays compatible with the old launcher flow. Create the ChatGPT plugin/app named exactly `CodexWeb Council`, choose **Tunnel**, choose the same OpenAI Secure MCP Tunnel, and use the authentication mode supported by your workspace.
+- **Electron + Playwright** is the authoritative child-agent transport. Child identity is assigned by Electron browser binding, not by model text. Persistent `https://chatgpt.com/c/...` conversations are resumed on later wakes.
+- **Plus fallback:** if a Plus workspace exposes the Tunnel/plugin UI but does not permit MCP write actions, open the intended persistent Project conversation inside the Electron ChatGPT browser and use **Agents → Bind current ChatGPT as Lead**. Electron reads the current conversation URL itself; the renderer cannot supply an arbitrary URL or agent identity.
 
-Capability material is kept in the owner-local Council state file, which is written with private filesystem permissions. Tokens are excluded from dashboard snapshots and normal agent records.
+## Deliberation protocol
+
+A normal managed round is:
+
+```text
+Lead/Architect -> explicit proposal
+Critic         -> independent threaded objection
+Researcher     -> evidence / repository finding
+Architect      -> revision
+Chair          -> final policy
+Lead           -> assigned tasks
+Reviewer       -> review / request changes
+```
+
+Final policy is not a majority-vote shortcut. Managed finalization requires:
+
+1. an explicit proposal;
+2. when more than one participant is involved, at least one independent reply from another participant in the latest proposal thread;
+3. no blocked task in the room; and
+4. no pending/delivering wake or review request.
+
+The final decision stores policy, rationale, accepted/rejected arguments, and unresolved risks.
+
+## Persistent agents
+
+Electron stores private managed-agent state separately from the public Council transcript:
+
+- stable agent id, name, role and mandate;
+- controller-owned permissions;
+- persistent ChatGPT conversation URL;
+- compact private checkpoint;
+- runtime presence.
+
+The launcher still caps active browser surfaces at **5**. Sleeping agents keep their conversation URL but release the physical browser surface, so the team can contain more registered agents without unbounded simultaneous ChatGPT traffic.
+
+### Managed permissions
+
+Managed roles use controller-side capabilities rather than trusting role text:
+
+- `spawn`
+- `finalize`
+- `reopen`
+- `assign`
+- `wake`
+- `review`
+
+The same authorization is enforced whether the action arrives through MCP or through the Playwright action footer. A model cannot elevate itself by emitting another `agent_id` or permission field.
+
+## Browser action footer
+
+Electron-managed child responses end with exactly one terminal action block:
+
+```text
+<COUNCIL_ACTIONS version="1">
+{"actions":[{"type":"PROPOSE","room_id":"project","body":"..."}]}
+</COUNCIL_ACTIONS>
+```
+
+The parser is strict and bounded. Unknown fields, malformed JSON, source identity overrides, oversized payloads, and invalid action batches are rejected. Council-state mutations are staged in an in-memory transaction and persisted once; a failed action rolls the whole Council batch back. Browser side effects such as wake/spawn run only after the Council-state commit succeeds.
+
+## Wake and resurrection
+
+For a sleeping managed agent:
+
+1. Electron resolves the stable agent binding.
+2. Playwright opens/resumes the exact saved `chatgpt.com/c/...` conversation.
+3. Only a verified unavailable/deleted conversation triggers a new conversation.
+4. Generic network/send errors never trigger resurrection, avoiding duplicate work.
+5. A compact resurrection packet includes identity, mandate, checkpoint, recent discussion, decisions, active work and wake reason.
+6. Peer-authored data is isolated as untrusted context.
+
+Wake loops are bounded by queue limits, cooldowns, per-target serialization, a maximum wake/spawn depth, and the five-surface browser cap.
+
+## Electron UI
+
+The original polished launcher remains the base UI. Council is additive:
+
+- **Council**: rooms, transcript, proposals, participants, wake queue, tasks, decisions.
+- **Agents**: managed project, Lead, child AI roles/mandates, runtime status and exact currently bound ChatGPT tabs.
+- **Connect**: the preserved Secure MCP Tunnel setup/verification flow.
+- **Updates**: verified release notification with **Update now / Later / Skip this version**.
+
+The renderer never receives managed conversation URLs, private checkpoints, capability tokens, or the owner-control token.
+
+## Setup
+
+### Development
+
+Requirements:
+
+- Bun `1.3.14`
+- a ChatGPT account usable in the launcher browser
+
+```bash
+bun install --frozen-lockfile
+cd launcher
+bun install --frozen-lockfile
+cd ..
+
+bun run verify
+bun run app
+```
+
+### Secure MCP Tunnel / plugin
+
+1. Open the Electron launcher and sign in to ChatGPT in its browser.
+2. Open **Connect**.
+3. Configure/reconnect the existing OpenAI Secure MCP Tunnel using the Tunnel ID and the runtime credential expected by the original launcher flow.
+4. In ChatGPT create a new custom plugin/app named exactly:
+
+```text
+CodexWeb Council
+```
+
+5. Select **Tunnel** and choose the same Tunnel.
+6. Select the authentication mode supported by your ChatGPT workspace; the old Council setup is designed for the no-extra-OAuth Tunnel flow.
+7. Press **Verify Council connector** in Electron.
+
+If your Plus workspace cannot execute Council write actions, use the Electron Plus fallback described above. The child agents themselves do not depend on MCP write access.
+
+## First Lead flow
+
+When MCP write actions are available, the first authenticated participant can call:
+
+```text
+council_join
+council_start_project
+council_spawn_agent
+```
+
+Only the earliest Council participant may bootstrap the managed project Lead. Once a managed project exists, another participant cannot replace it.
+
+When MCP writes are unavailable:
+
+1. navigate the Electron ChatGPT browser to the persistent conversation you want as Lead;
+2. open **Agents**;
+3. press **Bind current ChatGPT as Lead**;
+4. Electron validates the current URL itself and wakes that same conversation with a bootstrap instruction to form the team.
 
 ## Council MCP tools
 
-The active Council MCP surface includes:
+The Council MCP surface includes:
 
 ```text
 council_join
@@ -57,139 +195,62 @@ council_reply
 council_decide
 council_task_create
 council_task_update
+council_wake
 council_checkpoint
 council_context
-council_wake
 council_agent_status
+council_start_project
+council_spawn_agent
+council_managed_status
 ```
 
-`council_join` registers/resumes an identity. Every other call carries the caller's stable `agent_id` **and** private `agent_token`. Council does not use the retired Codex `turn_token` contract.
+The legacy Codex turn-token broker is not the active Council MCP product path.
 
-The MCP boundary rejects shared-content mutations that would contain the caller's own `agent_token`, so a prompt-injected participant cannot simply post its bearer capability into the room. A resumed join does not echo the token again after authentication succeeds.
+## Updates and GitHub builds
 
-## Deliberation, not just a task queue
+The repository keeps the original multi-platform packaging pipeline and updater security model.
 
-A typical Council round looks like:
+- Pull requests and `main` run the verify/package/smoke CI workflow when GitHub Actions is enabled for the fork.
+- CI retains verified Electron packages as short-lived GitHub Actions artifacts.
+- Stable releases are created only from version tags such as `v3.0.0` after the four-platform release workflow passes.
+- The Electron updater is pinned to `Nolane-x/codexweb` release assets.
+- Release asset URLs are path-pinned to GitHub HTTPS and downloads are SHA-256 checked against `checksums.txt` before installation.
+- Installed users choose whether to update; no silent install is introduced.
 
-```text
-Alice  -> proposal P-17
-Bob    -> objection on P-17
-Carol  -> evidence / repository finding
-Alice  -> revised position
-Chair  -> final decision D-09
-Chair  -> tasks for Builder + Reviewer
-```
+Do **not** tag a release until the GitHub Actions build has passed on macOS ARM64/x64, Linux x64 and Windows x64.
 
-The product intentionally keeps discussion, proposals, final policy, and executable work as different records. A decision can preserve accepted/rejected arguments and unresolved risks instead of reducing consensus to a simple vote count.
+## Verification
 
-Roles are currently collaboration metadata, not an authorization ACL. A compromised authenticated participant can still invoke actions that its role would not normally be expected to perform. Adding owner/chair action policy is a future hardening layer.
-
-## Wake / resurrection
-
-`council_wake` targets a stable participant ID; it never searches for a browser tab by title/position and never simulates mouse or keyboard clicks.
-
-In Full Council mode, the wake engine reuses the existing ChatGPT browser worker and the exact `CodexWeb Council` app/connector. It starts a ChatGPT Web turn with a bounded resurrection packet containing:
-
-- identity and role
-- room mission
-- exact wake reason
-- latest private checkpoint
-- recent relevant messages
-- recent decisions
-- active relevant tasks
-
-The caller of `council_wake` receives only a wake receipt — **not the target participant's private context/checkpoint**. The wake engine internally supplies the target's own capability to the target resurrection turn. The prompt labels peer-authored packet content as untrusted collaboration data, and server-side mutation checks reject attempts to publish the caller's own capability. Wake fallback text is token-redacted before persistence.
-
-Wake scheduling is serialized per target, capped for active target wakes, and rate-limited for repeated source→target requests to reduce wake storms.
-
-The resumed ChatGPT is required to re-read live Council state, participate through MCP, and save a fresh checkpoint. Hidden chain-of-thought is neither requested nor stored.
-
-V1 currently wakes a participant into a fresh ChatGPT Web resurrection turn. Rebinding each named participant to one permanent reusable ChatGPT conversation is a later hardening layer.
-
-## Standalone from Codex
-
-Council mode does **not** need the old Responses proxy or Codex model routing.
-
-During Council setup:
-
-1. any managed Codex route from the earlier bridge is restored using its migration journal;
-2. Council configuration is written with connector identity `CodexWeb Council`;
-3. launcher runtime starts the Secure MCP Tunnel only;
-4. the tunnel starts the Council MCP server;
-5. the old Responses daemon is not started.
-
-The previous large CLI/runtime/supervisor implementations remain as explicit `*-legacy` files for reversible migration and comparison. They are not the active Council path.
-
-## Launcher UI
-
-The original launcher design is deliberately preserved. `App.tsx` and the original `styles.css` are not rewritten.
-
-Two additive surfaces are mounted beside the existing app:
-
-- **Council** — a Discord-like room overlay with rooms, transcript/proposals, participants, wake queue, tasks, and decisions.
-- **Connect** — a Council-specific Secure MCP Tunnel setup/verification panel, so Council does not depend on the old “Install models into Codex” workflow.
-
-The room UI reads a bounded, read-only loopback endpoint on `127.0.0.1:17842`. Private checkpoints and agent capabilities are excluded from that snapshot. **Known limitation:** the loopback dashboard endpoint is local-machine visibility, not a strong authentication boundary; a hostile local process or a browser context able to make permitted loopback requests may read the shared Council transcript/decisions/tasks. Treat the current launcher as a trusted-workstation prototype until the dashboard moves behind an Electron IPC/capability boundary.
-
-## Setup
-
-The packaged launcher remains the intended runtime host.
-
-1. Sign in to ChatGPT in the launcher-owned browser.
-2. Open **Connect**.
-3. Supply an OpenAI Secure MCP Tunnel ID and a Tunnels Read + Use runtime key, or reconnect saved credentials.
-4. In ChatGPT Developer Mode, create a **new** custom MCP app/connector named exactly:
-
-```text
-CodexWeb Council
-```
-
-5. Select the same Tunnel and `Authentication: None`.
-6. Permit the Council actions required by your workspace/account policy.
-7. Return to the launcher and press **Verify Council connector**.
-
-The Verify action checks local tunnel readiness and that the launcher-owned ChatGPT browser can find the exact connector identity.
-
-When a new participant first calls `council_join`, it must keep the returned `agent_token` private in that conversation. Do not paste one participant's token into another participant's chat. Automatic wake delivery obtains the target's token locally, so the user does not need to copy it into wake prompts.
-
-Pre-capability experimental identities are intentionally locked after upgrading instead of allowing “first caller wins” identity takeover. If you already created Council agents on an older experimental build, back up/reset the experimental Council state or use new agent IDs.
-
-## Source development
-
-The repository still uses the original TypeScript/Bun/Electron toolchain while migration is in progress.
+Current local Linux verification for the Electron-first branch uses the exact repository pipeline:
 
 ```bash
-bun install --frozen-lockfile
-bun test
-bun run typecheck
-
-cd launcher
-npm ci
-npm test
-npm run typecheck
+bun run verify
+bun run app:package
+bun run app:smoke
+bun audit
+cd launcher && bun audit
 ```
 
-See [`docs/council.md`](docs/council.md) for the protocol and migration details.
+GitHub Actions on this fork must also be enabled before treating macOS/Windows release packaging as verified.
 
 ## Security model
 
-Key Council invariants:
+Important boundaries:
 
-- shared state is owner-local and atomically written;
-- per-agent bearer capabilities prevent simple `agent_id` impersonation at the MCP boundary;
-- message/task payloads are bounded;
-- private checkpoints and capabilities are not exposed to the human dashboard endpoint;
-- a wake caller cannot read the target's context packet;
-- repeated wakes are bounded/rate-limited;
-- wake context treats peer-authored content as untrusted data;
-- Council mutation tools reject content that would disclose the caller's own capability token;
-- wake targets explicit IDs, not browser UI positions;
-- Council writes are explicit MCP operations;
-- no hidden shell execution, permission bypass, or usage-limit bypass is introduced;
-- migration restores the old managed Codex route rather than leaving a hidden `openai_base_url` redirect.
+- shared Council state and private managed state are owner-local and atomically written;
+- per-agent MCP capabilities are not exposed through the dashboard;
+- Electron browser binding is authoritative for Playwright child identity;
+- managed ACLs apply to both MCP and browser action paths;
+- owner fallback uses a random bearer capability stored in a mode-`0600` local descriptor and rejects browser-origin owner-control requests;
+- private owner requests are loopback-only, redirect-disabled and timeout-bounded;
+- persistent conversation URLs and checkpoints never enter the renderer/public snapshot;
+- update downloads are repository/path/HTTPS/checksum pinned;
+- no hidden shell execution or arbitrary command action exists in the Council browser protocol.
 
-Remaining hardening work includes an authenticated/IPC dashboard boundary and role/owner authorization for privileged Council actions. Per-agent bearer capabilities protect identity but are not a substitute for full multi-tenant authorization against a hostile local machine.
+The read-only human dashboard is loopback-only but intentionally permits the packaged Electron `file://` renderer (`Origin: null`). It contains no capability tokens or private checkpoints; nevertheless, another hostile process or local file context running as the same OS user remains outside the current hardened multi-tenant threat model.
+
+See `docs/council.md` and the design/implementation documents under `docs/superpowers/` for deeper protocol details.
 
 ## Lineage and license
 
-CodexWeb Council is an independent fork/rework of [`miuuyy/codex-chatgpt-web`](https://github.com/miuuyy/codex-chatgpt-web). The original project and retained portions are MIT-licensed; existing license/copyright notices in this repository are preserved. This project is unofficial and is not affiliated with or endorsed by OpenAI.
+CodexWeb Council is an independent fork/rework of [`miuuyy/codex-chatgpt-web`](https://github.com/miuuyy/codex-chatgpt-web). Retained portions remain under their existing MIT/license notices. This project is unofficial and is not affiliated with or endorsed by OpenAI.
