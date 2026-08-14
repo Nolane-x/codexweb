@@ -5,6 +5,7 @@ const { join } = require("node:path");
 
 const root = join(__dirname, "..");
 const types = readFileSync(join(root, "src", "types.ts"), "utf8");
+const presence = readFileSync(join(root, "src", "council-presence.ts"), "utf8");
 const dock = readFileSync(join(root, "src", "CouncilDock.tsx"), "utf8");
 const agentsPanel = readFileSync(join(root, "src", "CouncilAgentsPanel.tsx"), "utf8");
 const councilCss = readFileSync(join(root, "src", "council.css"), "utf8");
@@ -18,9 +19,17 @@ test("shared projection types keep presence freshness separate from explicit age
   assert.match(types, /presence:\s*CouncilAgentPresenceView\[\]/);
 });
 
+test("effective presence ages a fresh server lease stale using the renderer clock", () => {
+  assert.match(presence, /export function effectivePresenceFreshness/);
+  assert.match(presence, /Date\.parse\(presence\.leaseExpiresAt\)/);
+  assert.match(presence, /leaseExpiresAt.*nowMs|nowMs.*leaseExpiresAt/s);
+  assert.match(presence, /"unknown"/);
+  assert.match(presence, /"fresh"/);
+  assert.match(presence, /"stale"/);
+});
+
 test("Council participant online dot is driven by effective lease freshness, not explicit agent status", () => {
   assert.match(dock, /effectivePresenceFreshness/);
-  assert.match(dock, /Date\.parse\(presence\.leaseExpiresAt\)/);
   assert.match(dock, /presenceClockMs/);
   assert.match(dock, /setInterval/);
   assert.match(dock, /presence-\$\{presenceFreshness\}/);
