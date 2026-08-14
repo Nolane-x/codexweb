@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { effectivePresenceFreshness, presenceLabel } from "./council-presence";
 import type { BrowserState, CouncilRuntimeViewState, ManagedCouncilView } from "./types";
 
 function initials(name: string): string {
@@ -8,6 +9,11 @@ function initials(name: string): string {
 function managedSnapshot(runtime: CouncilRuntimeViewState | null): ManagedCouncilView | null {
   if (runtime?.projection.syncState === "live" || runtime?.projection.syncState === "stale") return runtime.projection.state.managed;
   return null;
+}
+
+function sharedPresence(runtime: CouncilRuntimeViewState | null) {
+  if (runtime?.projection.syncState === "live" || runtime?.projection.syncState === "stale") return runtime.projection.state.presence;
+  return [];
 }
 
 function shortCommit(value: string): string {
@@ -21,6 +27,7 @@ export function CouncilAgentsPanel() {
   const [binding, setBinding] = useState(false);
   const [bindMessage, setBindMessage] = useState("");
   const [projectName, setProjectName] = useState("ChatGPT Project");
+  const [presenceClockMs, setPresenceClockMs] = useState(() => Date.now());
 
   useEffect(() => {
     const api = window.codexWebLauncher;
@@ -36,6 +43,13 @@ export function CouncilAgentsPanel() {
     return () => { disposed = true; offBrowser(); offCouncil(); };
   }, []);
 
+  useEffect(() => {
+    if (!open) return;
+    setPresenceClockMs(Date.now());
+    const timer = window.setInterval(() => setPresenceClockMs(Date.now()), 5_000);
+    return () => window.clearInterval(timer);
+  }, [open]);
+
   const managed = managedSnapshot(runtime);
   const workspace = managed?.project?.workspace;
   const sharedLive = runtime?.projection.syncState === "live";
@@ -43,6 +57,7 @@ export function CouncilAgentsPanel() {
   const managedProject = runtime?.managedProject;
   const capabilities = runtime?.capabilities;
   const tabByAgent = useMemo(() => new Map((browser?.tabs ?? []).filter(tab => tab.agentId).map(tab => [tab.agentId!, tab])), [browser]);
+  const presenceByAgent = useMemo(() => new Map(sharedPresence(runtime).map(presence => [presence.agentId, presence])), [runtime]);
   const canBind = sharedLive && managedProject?.state === "unattached" && browser?.authenticated === true;
 
   const openAgent = async (agentId: string) => {
@@ -72,7 +87,7 @@ export function CouncilAgentsPanel() {
 
   return (
     <>
-      <button className={`council-agents-launch${open ? " is-open" : ""}`} onClick={() => setOpen(value => !value)} type="button" title="Managed ChatGPT agents">
+      <button className={`council-agents-launch${open ? " is-open" : ""}`} onClick={() => setOpen(value => !value)} type="button" title={sharedLive ? "Shared Council sync is live" : "Shared Council sync is unavailable or reconnecting"}>
         <span>AI</span><strong>Agents</strong><i className={sharedLive ? "online" : "offline"} />
       </button>
       {open ? (
@@ -113,11 +128,12 @@ export function CouncilAgentsPanel() {
           <div className="council-agents-list">
             {(managed?.agents ?? []).map(agent => {
               const tab = tabByAgent.get(agent.id);
+              const presenceFreshness = effectivePresenceFreshness(presenceByAgent.get(agent.id), presenceClockMs);
               return (
                 <button className="council-agent-row" key={agent.id} disabled={!tab} onClick={() => void openAgent(agent.id)} type="button">
-                  <span className="council-agent-row-avatar">{initials(agent.name)}<i className={agent.runtimeStatus} /></span>
+                  <span className="council-agent-row-avatar">{initials(agent.name)}<i className={`presence-${presenceFreshness}`} title={`Council presence: ${presenceLabel(presenceFreshness)}`} /></span>
                   <span className="council-agent-row-copy"><strong>{agent.name}</strong><small>{agent.role}</small><em>{agent.mandate}</em></span>
-                  <span className="council-agent-row-meta"><b>{agent.runtimeStatus}</b><small>{agent.conversationBound ? "conversation saved" : "new conversation"}</small>{tab ? <small>open ChatGPT ↗</small> : null}</span>
+                  <span className="council-agent-row-meta"><b>{presenceLabel(presenceFreshness)}</b><small>runtime {agent.runtimeStatus}</small><small>{agent.conversationBound ? "conversation saved" : "new conversation"}</small>{tab ? <small>open ChatGPT ↗</small> : null}</span>
                 </button>
               );
             })}
