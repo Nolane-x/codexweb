@@ -47,6 +47,34 @@ export function registerCouncilManagedTools(server: McpServer, runtime: CouncilM
     return councilMcpResult({ agent: publicAgent(child) });
   });
 
+  server.registerTool("council_bind_repo_workspace", {
+    title: "Bind managed Council repository workspace",
+    description: "Pin the active managed project to sanitized GitHub repository identity and an immutable base commit for later review/execution safety. This stores metadata only; it does not accept, persist, or grant GitHub credentials, filesystem paths, diffs, or execution capability.",
+    inputSchema: {
+      ...actorSchema,
+      provider: z.literal("github"),
+      repo_id: z.string().trim().min(3).max(240),
+      owner: z.string().trim().min(1).max(100),
+      name: z.string().trim().min(1).max(100),
+      default_branch: z.string().trim().min(1).max(255),
+      base_commit: z.string().trim().regex(/^(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64})$/),
+    },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  }, async ({ agent_id, agent_token, provider, repo_id, owner, name, default_branch, base_commit }, extra) => {
+    const actor = resolveActor(extra, agent_id, agent_token);
+    assertAgentTokenNotExposed(agent_token, [repo_id, owner, name, default_branch, base_commit]);
+    const project = runtime.bindRepoWorkspace(actor, {
+      schemaVersion: 1,
+      provider,
+      repoId: repo_id,
+      owner,
+      name,
+      defaultBranch: default_branch,
+      baseCommit: base_commit,
+    });
+    return councilMcpResult({ project });
+  });
+
   server.registerTool("council_managed_status", {
     title: "Read Electron managed Council status",
     description: "Read the active managed project and safe participant metadata. Persistent conversation URLs and private checkpoints are never returned.",
