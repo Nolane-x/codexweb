@@ -1,31 +1,19 @@
 import { useEffect, useMemo, useState } from "react";
-import type { BrowserState } from "./types";
-
-const ENDPOINT = "http://127.0.0.1:17842/api/state";
-
-type RuntimeStatus = "active" | "sleeping" | "queued" | "failed";
-interface ManagedProject { roomId: string; name: string; mission: string; leadAgentId: string }
-interface ManagedAgent {
-  id: string;
-  name: string;
-  role: string;
-  mandate: string;
-  permissions: string[];
-  conversationBound: boolean;
-  checkpointSaved: boolean;
-  runtimeStatus: RuntimeStatus;
-}
-interface ManagedSnapshot { project: ManagedProject | null; agents: ManagedAgent[] }
+import type { BrowserState, CouncilRuntimeViewState, ManagedCouncilView } from "./types";
 
 function initials(name: string): string {
   return name.trim().split(/\s+/).slice(0, 2).map(part => part[0]?.toUpperCase() ?? "").join("") || "AI";
 }
 
+function managedSnapshot(runtime: CouncilRuntimeViewState | null): ManagedCouncilView | null {
+  if (runtime?.projection.syncState === "live" || runtime?.projection.syncState === "stale") return runtime.projection.state.managed;
+  return null;
+}
+
 export function CouncilAgentsPanel() {
   const [open, setOpen] = useState(false);
-  const [managed, setManaged] = useState<ManagedSnapshot | null>(null);
+  const [runtime, setRuntime] = useState<CouncilRuntimeViewState | null>(null);
   const [browser, setBrowser] = useState<BrowserState | null>(null);
-  const [online, setOnline] = useState(false);
   const [binding, setBinding] = useState(false);
   const [bindMessage, setBindMessage] = useState("");
   const [projectName, setProjectName] = useState("ChatGPT Project");
@@ -34,33 +22,23 @@ export function CouncilAgentsPanel() {
     const api = window.codexWebLauncher;
     if (!api) return;
     let disposed = false;
-    void api.snapshot().then(snapshot => { if (!disposed) setBrowser(snapshot.browser); }).catch(() => {});
-    const unsubscribe = api.onBrowserState(setBrowser);
-    return () => { disposed = true; unsubscribe(); };
+    void api.snapshot().then(snapshot => {
+      if (disposed) return;
+      setBrowser(snapshot.browser);
+      setRuntime(snapshot.councilRuntime);
+    }).catch(() => {});
+    const offBrowser = api.onBrowserState(setBrowser);
+    const offCouncil = api.onCouncilRuntime(setRuntime);
+    return () => { disposed = true; offBrowser(); offCouncil(); };
   }, []);
 
-  useEffect(() => {
-    let disposed = false;
-    let controller: AbortController | undefined;
-    const poll = async () => {
-      controller?.abort();
-      controller = new AbortController();
-      const timeout = window.setTimeout(() => controller?.abort(), 1_800);
-      try {
-        const response = await fetch(ENDPOINT, { cache: "no-store", signal: controller.signal });
-        if (!response.ok) throw new Error(String(response.status));
-        const value = await response.json() as { managed?: ManagedSnapshot | null };
-        if (!disposed) { setManaged(value.managed ?? null); setOnline(true); }
-      } catch {
-        if (!disposed) setOnline(false);
-      } finally { window.clearTimeout(timeout); }
-    };
-    void poll();
-    const interval = window.setInterval(() => void poll(), 1_500);
-    return () => { disposed = true; controller?.abort(); window.clearInterval(interval); };
-  }, []);
-
+  const managed = managedSnapshot(runtime);
+  const sharedLive = runtime?.projection.syncState === "live";
+  const sharedStale = runtime?.projection.syncState === "stale";
+  const managedProject = runtime?.managedProject;
+  const capabilities = runtime?.capabilities;
   const tabByAgent = useMemo(() => new Map((browser?.tabs ?? []).filter(tab => tab.agentId).map(tab => [tab.agentId!, tab])), [browser]);
+  const canBind = sharedLive && managedProject?.state === "unattached" && browser?.authenticated === true;
 
   const openAgent = async (agentId: string) => {
     const api = window.codexWebLauncher;
@@ -74,7 +52,7 @@ export function CouncilAgentsPanel() {
 
   const bindLead = async () => {
     const api = window.codexWebLauncher;
-    if (!api || binding) return;
+    if (!api || binding || !canBind) return;
     setBinding(true);
     setBindMessage("Binding the current persistent ChatGPT conversation…");
     try {
@@ -90,12 +68,12 @@ export function CouncilAgentsPanel() {
   return (
     <>
       <button className={`council-agents-launch${open ? " is-open" : ""}`} onClick={() => setOpen(value => !value)} type="button" title="Managed ChatGPT agents">
-        <span>AI</span><strong>Agents</strong><i className={online ? "online" : "offline"} />
+        <span>AI</span><strong>Agents</strong><i className={sharedLive ? "online" : "offline"} />
       </button>
       {open ? (
         <section className="council-agents-panel" role="dialog" aria-label="Managed ChatGPT agents">
           <header>
-            <div><span>Electron team</span><strong>{managed?.project?.name ?? "No managed project"}</strong></div>
+            <div><span>Electron team · {sharedStale ? "reconnecting" : sharedLive ? "shared live" : "sync unavailable"}</span><strong>{managed?.project?.name ?? "No managed project"}</strong></div>
             <button onClick={() => setOpen(false)} aria-label="Close managed agents">×</button>
           </header>
           {managed?.project ? (
@@ -109,11 +87,12 @@ export function CouncilAgentsPanel() {
               <strong>Start with your current ChatGPT conversation</strong>
               <p>Open the persistent Project chat you want to lead this Council. Electron reads that exact conversation URL itself; it is never accepted from page content.</p>
               <input value={projectName} onChange={event => setProjectName(event.target.value)} maxLength={160} placeholder="Project name" />
-              <button type="button" disabled={binding || browser?.authenticated !== true || !online} onClick={() => void bindLead()}>
+              <button type="button" disabled={binding || !canBind} onClick={() => void bindLead()}>
                 {binding ? "Binding…" : "Bind current ChatGPT as Lead"}
               </button>
-              {!online ? <small>Connect the Council Tunnel first so the local Council runtime is online.</small> : null}
+              {!sharedLive ? <small>Attaching a project requires a live canonical Council session. Existing shared data stays visible while reconnecting.</small> : null}
               {browser?.authenticated !== true ? <small>Sign in to ChatGPT in Electron first.</small> : null}
+              {capabilities && !capabilities.secureTunnel.available ? <small>Secure Tunnel is unavailable; only actions that require it are disabled.</small> : null}
               {bindMessage ? <small>{bindMessage}</small> : null}
             </div>
           )}
