@@ -31,10 +31,6 @@ export async function runCouncilMcpMain(args: string[]): Promise<void> {
   if (remaining.length > 0) throw new Error(`Unknown Council MCP arguments: ${remaining.join(" ")}`);
 
   const store = new CouncilStore(storePath);
-  const httpServer = startCouncilHttpServer(store, {
-    onError: message => console.error(`[council-http] dashboard unavailable: ${message}`),
-  });
-
   let managedRuntime: CouncilManagedRuntime | undefined;
   let fallbackWake: CouncilWakeEngine | undefined;
   try {
@@ -59,6 +55,10 @@ export async function runCouncilMcpMain(args: string[]): Promise<void> {
     console.info(`[council-runtime] managed browser transport unavailable: ${message}`);
   }
 
+  const httpServer = startCouncilHttpServer(store, {
+    onError: message => console.error(`[council-http] dashboard unavailable: ${message}`),
+    ...(managedRuntime ? { managedSnapshot: () => ({ project: managedRuntime!.activeProject() ?? null, agents: managedRuntime!.publicAgents() }) } : {}),
+  });
   const wakeDelivery = managedRuntime || fallbackWake
     ? new HybridCouncilWakeDelivery(store, managedRuntime, fallbackWake)
     : undefined;
