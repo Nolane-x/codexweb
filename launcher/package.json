@@ -2,10 +2,10 @@
   "name": "codex-web-gpt-launcher",
   "version": "2.1.9",
   "private": true,
-  "description": "Desktop control center for Codex ChatGPT Web",
-  "author": "miuuyy",
+  "description": "Desktop control center for CodexWeb Council",
+  "author": "miuuyy / Nolane-x",
   "type": "module",
-  "main": "electron/main.cjs",
+  "main": "electron/main-council.cjs",
   "scripts": {
     "dev": "bun run scripts/dev.cjs",
     "typecheck": "tsc --noEmit",
