@@ -13,6 +13,14 @@ function parseCouncilTurnStart(body) {
   return { traceId: body.traceId, helperPid: body.helperPid, ...(body.bindingKey ? { bindingKey: body.bindingKey } : {}) };
 }
 
+function parseCouncilAgentRelease(body) {
+  if (!body || typeof body !== "object" || Array.isArray(body)) throw new Error("agent release body is invalid");
+  const keys = Object.keys(body);
+  if (keys.length !== 1 || keys[0] !== "bindingKey") throw new Error("agent release body contains unknown fields");
+  if (typeof body.bindingKey !== "string" || !BINDING_KEY.test(body.bindingKey)) throw new Error("bindingKey is invalid");
+  return { bindingKey: body.bindingKey };
+}
+
 function secureTokenMatches(expected, authorization) {
   const prefix = "Bearer ";
   if (typeof authorization !== "string" || !authorization.startsWith(prefix)) return false;
@@ -47,15 +55,24 @@ function writeJson(response, status, body) {
 function createCouncilBrowserControlServerClass(LegacyBrowserControlServer) {
   return class CouncilBrowserControlServer extends LegacyBrowserControlServer {
     async handle(request, response) {
-      if (request.method !== "POST" || request.url !== "/v1/turn/start") return await super.handle(request, response);
+      const persistentStart = request.method === "POST" && request.url === "/v1/turn/start";
+      const agentRelease = request.method === "POST" && request.url === "/v1/agent/release";
+      if (!persistentStart && !agentRelease) return await super.handle(request, response);
       if (!secureTokenMatches(this.token, request.headers.authorization)) {
         writeJson(response, 401, { error: "unauthorized" });
         return;
       }
       try {
-        const body = parseCouncilTurnStart(await readJson(request));
         const host = this.getBrowserHost();
         if (!host) throw new Error("browser host is not ready");
+        if (agentRelease) {
+          const body = parseCouncilAgentRelease(await readJson(request));
+          const released = host.releaseAgentSurface(body.bindingKey);
+          this.logger.info("browser.agent_release_requested", { bindingKey: body.bindingKey, released });
+          writeJson(response, 200, { ok: true, released });
+          return;
+        }
+        const body = parseCouncilTurnStart(await readJson(request));
         const preferences = this.getPreferences();
         const lease = host.beginTurn(body.traceId, preferences.showBrowserDuringTurns === true, body.helperPid, body.bindingKey);
         this.logger.info("browser.turn_started", { traceId: body.traceId, ...(body.bindingKey ? { bindingKey: body.bindingKey } : {}) });
@@ -69,4 +86,4 @@ function createCouncilBrowserControlServerClass(LegacyBrowserControlServer) {
   };
 }
 
-module.exports = { parseCouncilTurnStart, createCouncilBrowserControlServerClass };
+module.exports = { parseCouncilTurnStart, parseCouncilAgentRelease, createCouncilBrowserControlServerClass };
