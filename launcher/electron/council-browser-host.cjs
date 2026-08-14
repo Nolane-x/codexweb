@@ -9,10 +9,12 @@ function createCouncilBrowserHostClass(LegacyBrowserHost) {
 
     snapshot() {
       const value = super.snapshot();
+      const registry = this.agentSurfaceRegistry;
+      if (!registry) return value;
       return {
         ...value,
         tabs: (value.tabs || []).map(tab => {
-          const binding = this.agentSurfaceRegistry.findByTab(tab.id);
+          const binding = registry.findByTab(tab.id);
           const agentId = binding?.bindingKey?.startsWith("agent:") ? binding.bindingKey.slice("agent:".length) : null;
           return agentId ? { ...tab, agentId } : tab;
         }),
@@ -21,11 +23,13 @@ function createCouncilBrowserHostClass(LegacyBrowserHost) {
 
     beginTurn(traceId, reveal, helperPid, bindingKey) {
       if (!bindingKey) return super.beginTurn(traceId, reveal, helperPid);
-      const bound = this.agentSurfaceRegistry.find(bindingKey);
+      const registry = this.agentSurfaceRegistry;
+      if (!registry) throw new Error("Council agent surface registry is not initialized");
+      const bound = registry.find(bindingKey);
       if (bound) {
         const tab = this.turnTabs.get(bound.tabId);
         if (!tab || tab.surfaceId !== bound.surfaceId || tab.view?.webContents?.isDestroyed?.()) {
-          this.agentSurfaceRegistry.release(bindingKey);
+          registry.release(bindingKey);
           if (tab) super.removeTurnTab(tab, true);
           return this.beginTurn(traceId, reveal, helperPid, bindingKey);
         }
@@ -51,7 +55,7 @@ function createCouncilBrowserHostClass(LegacyBrowserHost) {
       if (!tab) throw new Error(`Council browser host could not resolve newly leased turn ${traceId}`);
       try {
         tab.bindingKey = bindingKey;
-        this.agentSurfaceRegistry.attach({ bindingKey, tabId: tab.id, surfaceId: tab.surfaceId });
+        registry.attach({ bindingKey, tabId: tab.id, surfaceId: tab.surfaceId });
       } catch (error) {
         delete tab.bindingKey;
         super.removeTurnTab(tab, true);
@@ -79,12 +83,14 @@ function createCouncilBrowserHostClass(LegacyBrowserHost) {
     }
 
     releaseAgentSurface(bindingKey) {
-      const bound = this.agentSurfaceRegistry.find(bindingKey);
+      const registry = this.agentSurfaceRegistry;
+      if (!registry) return false;
+      const bound = registry.find(bindingKey);
       if (!bound) return false;
       const tab = this.turnTabs.get(bound.tabId);
       if (tab?.status === "running") throw new Error(`Council agent surface ${bindingKey} still has an active turn`);
       if (tab) this.removeTurnTab(tab, false);
-      else this.agentSurfaceRegistry.release(bindingKey);
+      else registry.release(bindingKey);
       this.publishState?.(this.snapshot());
       this.writeDescriptor?.();
       this.logger?.info?.("browser.agent_tab_released", { bindingKey });
@@ -92,7 +98,7 @@ function createCouncilBrowserHostClass(LegacyBrowserHost) {
     }
 
     removeTurnTab(tab, abortRunning) {
-      if (tab?.bindingKey) this.agentSurfaceRegistry.release(tab.bindingKey);
+      if (tab?.bindingKey && this.agentSurfaceRegistry) this.agentSurfaceRegistry.release(tab.bindingKey);
       return super.removeTurnTab(tab, abortRunning);
     }
   };
