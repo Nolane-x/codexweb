@@ -11,6 +11,9 @@ test("Electron starts through additive Council wrapper while preserving legacy m
   const wrapper = fs.readFileSync(path.join(root, "electron", "main-council.cjs"), "utf8");
   assert.match(wrapper, /browser-host\.cjs/);
   assert.match(wrapper, /control-server\.cjs/);
+  assert.match(wrapper, /runtime\.cjs/);
+  assert.match(wrapper, /setupCouncilMcp/);
+  assert.match(wrapper, /runtimeModule\.RuntimeHost = CouncilRuntimeHost/);
   assert.match(wrapper, /require\("\.\/main\.cjs"\)/);
   assert.equal(fs.existsSync(path.join(root, "electron", "main.cjs")), true);
 });
