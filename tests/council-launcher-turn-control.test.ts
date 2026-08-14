@@ -8,14 +8,24 @@ describe("launcher persistent turn control", () => {
       readDescriptor: () => ({ control: { endpoint: "http://127.0.0.1:4567", token: "secret-token" } }),
       fetchImpl: async (url, init) => {
         calls.push({ url: String(url), init: init ?? {} });
-        return new Response(JSON.stringify({ ok: true, surfaceId: "A".repeat(32) }), { status: 200, headers: { "content-type": "application/json" } });
+        return new Response(JSON.stringify({ ok: true, surfaceId: "a".repeat(36) }), { status: 200, headers: { "content-type": "application/json" } });
       },
     });
     const lease = await control.start({ traceId: "trace_123", bindingKey: "agent:alice" });
-    expect(lease.surfaceId).toBe("A".repeat(32));
+    expect(lease.surfaceId).toBe("a".repeat(36));
     expect(calls[0]?.url).toBe("http://127.0.0.1:4567/v1/turn/start");
     expect((calls[0]?.init.headers as Record<string, string>).authorization).toBe("Bearer secret-token");
     expect(JSON.parse(String(calls[0]?.init.body))).toEqual({ phase: "start", traceId: "trace_123", helperPid: process.pid, bindingKey: "agent:alice" });
+  });
+
+  test("releases a sleeping persistent surface by stable binding key", async () => {
+    const calls: string[] = [];
+    const control = createLauncherPersistentTurnControl("/descriptor", {
+      readDescriptor: () => ({ control: { endpoint: "http://127.0.0.1:4567", token: "secret-token" } }),
+      fetchImpl: async (url) => { calls.push(String(url)); return new Response(JSON.stringify({ ok: true, released: true }), { status: 200, headers: { "content-type": "application/json" } }); },
+    });
+    expect(await control.release({ bindingKey: "agent:alice" })).toBe(true);
+    expect(calls).toEqual(["http://127.0.0.1:4567/v1/agent/release"]);
   });
 
   test("fails closed on non-loopback descriptor", async () => {
