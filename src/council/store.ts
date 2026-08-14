@@ -44,6 +44,12 @@ function presenceTime(value: string | Date | undefined): { iso: string; millisec
   if (!Number.isFinite(milliseconds)) throw new Error("Council presence timestamp is invalid");
   return { iso: date.toISOString(), milliseconds };
 }
+function wakeExpiryTime(value: string | Date | undefined): { iso: string; milliseconds: number } {
+  const date = value === undefined ? new Date() : value instanceof Date ? value : new Date(value);
+  const milliseconds = date.valueOf();
+  if (!Number.isFinite(milliseconds)) throw new Error("Council wake expiry timestamp is invalid");
+  return { iso: date.toISOString(), milliseconds };
+}
 
 export interface CouncilJoinResult {
   agent: CouncilAgent;
@@ -231,6 +237,21 @@ export class CouncilStore {
     const value = addCouncilWake(this.state, input); this.persist(); return structuredClone(value);
   }
   updateWake(wakeId: string, status: CouncilWakeStatus, lastError?: string): CouncilWakeEvent { const wake = this.state.wakes.find(candidate => candidate.id === wakeId); if (!wake) throw new Error("wake event does not exist"); const value = updateCouncilWake(wake, status, lastError); this.persist(); return structuredClone(value); }
+  expireWakes(at?: string | Date): number {
+    const expiry = wakeExpiryTime(at);
+    return this.transaction(() => {
+      let expired = 0;
+      for (const wake of this.state.wakes) {
+        if (!isActiveCouncilWake(wake) || !wake.expiresAt) continue;
+        const expiresAt = Date.parse(wake.expiresAt);
+        if (!Number.isFinite(expiresAt) || expiresAt > expiry.milliseconds) continue;
+        updateCouncilWake(wake, "expired", undefined, expiry.iso);
+        expired += 1;
+      }
+      if (expired > 0) this.persist();
+      return expired;
+    });
+  }
   checkpoint(input: { agentId: string; roomId?: string; summary: string }): CouncilCheckpoint { this.requireAgent(input.agentId); if (input.roomId) this.requireRoom(input.roomId); const checkpoint: CouncilCheckpoint = { agentId: input.agentId, ...(input.roomId ? { roomId: input.roomId } : {}), summary: councilText(input.summary, "checkpoint", 24_000), updatedAt: councilNow() }; const existing = this.state.checkpoints.find(candidate => candidate.agentId === input.agentId && candidate.roomId === input.roomId); if (existing) Object.assign(existing, checkpoint); else this.state.checkpoints.push(checkpoint); this.persist(); return structuredClone(checkpoint); }
   buildContextPacket(input: { agentId: string; roomId: string; wakeId?: string; recentLimit?: number }): CouncilContextPacket {
     const identity = structuredClone(this.requireAgent(input.agentId)); const room = structuredClone(this.requireRoom(input.roomId));
