@@ -34,7 +34,6 @@ function projectName(value: string): string {
 export async function runCouncilMcpMain(args: string[]): Promise<void> {
   const remaining = [...args];
   const storePath = takeOption(remaining, "--store") ?? join(getConfigDir(), "council", "state.json");
-  // Accepted during migration because the existing tunnel supervisor still supplies it.
   takeOption(remaining, "--broker-socket");
   if (remaining.length > 0) throw new Error(`Unknown Council MCP arguments: ${remaining.join(" ")}`);
 
@@ -112,7 +111,9 @@ export async function runCouncilMcpMain(args: string[]): Promise<void> {
 
   if (httpServer && managedRuntime) {
     try {
-      const descriptor = issueCouncilOwnerControl(ownerDescriptorPath, httpServer.port);
+      const ownerPort = httpServer.port;
+      if (typeof ownerPort !== "number" || !Number.isInteger(ownerPort)) throw new Error("Council owner server did not expose a valid loopback port");
+      const descriptor = issueCouncilOwnerControl(ownerDescriptorPath, ownerPort);
       ownerToken = descriptor.token;
     } catch (error) {
       httpServer.stop(true);
