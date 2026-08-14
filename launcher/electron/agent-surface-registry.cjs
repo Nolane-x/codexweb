@@ -31,6 +31,13 @@ class AgentSurfaceRegistry {
     return record ? { ...record } : null;
   }
 
+  findByTab(tabId) {
+    const key = this.byTab.get(tabId);
+    if (!key) return null;
+    const record = this.byBinding.get(key);
+    return record ? { ...record } : null;
+  }
+
   release(bindingKey) {
     const key = this.validateKey(bindingKey);
     const record = this.byBinding.get(key);
