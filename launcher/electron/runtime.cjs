@@ -2,9 +2,30 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { randomBytes } = require("node:crypto");
 const legacy = require("./runtime-legacy.cjs");
+const { writePrivateFileAtomic } = require("./atomic-file.cjs");
 
 const COUNCIL_CONNECTOR_NAME = "CodexWeb Council";
 const MCP_SETUP_TIMEOUT_MS = 10 * 60_000;
+
+function snapshotRegularFile(filePath) {
+  try {
+    const stat = fs.lstatSync(filePath);
+    if (!stat.isFile()) throw new Error(`Council setup checkpoint is not a regular file: ${filePath}`);
+    return { path: filePath, exists: true, data: fs.readFileSync(filePath), mode: stat.mode & 0o777 };
+  } catch (error) {
+    if (error?.code === "ENOENT") return { path: filePath, exists: false };
+    throw error;
+  }
+}
+
+function restoreRegularFile(snapshot, platform = process.platform) {
+  if (!snapshot.exists) {
+    fs.rmSync(snapshot.path, { force: true });
+    return;
+  }
+  writePrivateFileAtomic(snapshot.path, snapshot.data);
+  if (platform !== "win32") fs.chmodSync(snapshot.path, snapshot.mode);
+}
 
 class RuntimeHost extends legacy.RuntimeHost {
   isCouncilRuntime() {
@@ -12,83 +33,93 @@ class RuntimeHost extends legacy.RuntimeHost {
     return current.configured && current.mode === "full" && current.config?.appName === COUNCIL_CONNECTOR_NAME;
   }
 
-  mcpConnectorName() {
-    if (this.isCouncilRuntime()) return COUNCIL_CONNECTOR_NAME;
-    return super.mcpConnectorName();
-  }
+  // Safe migration convenience: this reads only codexweb's own config and private Tunnel key file.
+  // It never consults CODEX_HOME, ~/.codex/config.toml, or the Codex integration journal.
+  mcpCredentialsConfigured() { return super.mcpCredentialsConfigured(); }
 
-  browserConnectorName() {
-    if (this.isCouncilRuntime()) return COUNCIL_CONNECTOR_NAME;
-    return super.browserConnectorName();
-  }
+  mcpConnectorName() { return COUNCIL_CONNECTOR_NAME; }
+  browserConnectorName() { return COUNCIL_CONNECTOR_NAME; }
 
   async doctor() {
-    if (!this.isCouncilRuntime()) return super.doctor();
+    if (!this.isCouncilRuntime()) {
+      return { ok: false, checks: [{ id: "council-runtime", status: "warning", message: "Connect the saved or new Secure MCP Tunnel to start the local Council service" }] };
+    }
     try {
       const runtime = await this.supervisor.startIfConfigured();
       const ok = runtime.status === "ready";
-      return {
-        ok,
-        checks: [{
-          id: "council-runtime",
-          status: ok ? "ok" : "error",
-          message: ok ? "Council Secure MCP Tunnel is ready" : `Council runtime is ${runtime.status}${runtime.detail ? `: ${runtime.detail}` : ""}`,
-        }],
-      };
+      return { ok, checks: [{ id: "council-runtime", status: ok ? "ok" : "error", message: ok ? "Council Secure MCP Tunnel is ready" : `Council runtime is ${runtime.status}${runtime.detail ? `: ${runtime.detail}` : ""}` }] };
     } catch (error) {
       return { ok: false, checks: [{ id: "council-runtime", status: "error", message: error instanceof Error ? error.message : String(error) }] };
     }
   }
 
-  setupCouncilMcp({ tunnelId = "", runtimeKey = "", replace = false } = {}) {
+  async setupCouncilMcp({ tunnelId = "", runtimeKey = "", replace = false } = {}) {
     if (this.currentOperation()) throw new Error(`Another launcher operation is active: ${this.currentOperation()}`);
     const reuseSavedCredentials = replace !== true && this.mcpCredentialsConfigured();
-    if (!reuseSavedCredentials && !/^tunnel_[a-f0-9]{32}$/.test(tunnelId)) {
-      throw new Error("Tunnel ID must be tunnel_ followed by 32 lowercase hexadecimal characters");
-    }
-    if (!reuseSavedCredentials && (typeof runtimeKey !== "string" || runtimeKey.trim().length < 20)) {
-      throw new Error("A Tunnels Read + Use runtime key is required");
-    }
+    if (!reuseSavedCredentials && !/^tunnel_[a-f0-9]{32}$/.test(tunnelId)) throw new Error("Tunnel ID must be tunnel_ followed by 32 lowercase hexadecimal characters");
+    if (!reuseSavedCredentials && (typeof runtimeKey !== "string" || runtimeKey.trim().length < 20)) throw new Error("A Tunnels Read + Use runtime key is required");
+
+    // Rollback owns only codexweb's config. No Codex file is captured or restored.
+    const configPath = this.supervisor.configPath;
+    if (typeof configPath !== "string" || !path.isAbsolute(configPath)) throw new Error("Council runtime supervisor has no absolute configuration path");
+    const configCheckpoint = snapshotRegularFile(configPath);
+    const previousWasCouncil = this.isCouncilRuntime();
     const args = ["council-setup", "--browser-host-descriptor", this.browserDescriptorPath];
-    if (reuseSavedCredentials) {
-      return this.runSetup("council-setup", args, {
-        message: "Reconnecting ChatGPT Council with saved tunnel credentials",
-        successMessage: "ChatGPT Council runtime is ready",
+    let keyPath;
+    if (!reuseSavedCredentials) {
+      const secretsDir = path.join(this.app.getPath("userData"), "secrets");
+      fs.mkdirSync(secretsDir, { recursive: true, mode: 0o700 });
+      try { fs.chmodSync(secretsDir, 0o700); } catch {}
+      keyPath = path.join(secretsDir, `runtime-key-${randomBytes(16).toString("hex")}.tmp`);
+      fs.writeFileSync(keyPath, runtimeKey.trim(), { flag: "wx", mode: 0o600 });
+      args.push("--tunnel-id", tunnelId, "--runtime-key-file", keyPath);
+    }
+
+    this.lifecycleOperation = "council-setup";
+    try {
+      if (previousWasCouncil) await this.supervisor.stopForSetup();
+      const result = await this.run("council-setup", args, {
+        message: reuseSavedCredentials ? "Reconnecting Council with saved Tunnel credentials" : "Connecting Council Tunnel",
+        successMessage: "Council Tunnel configuration saved",
         timeoutMs: MCP_SETUP_TIMEOUT_MS,
       });
+      const runtime = await this.supervisor.startIfConfigured();
+      if (runtime.status !== "ready") throw new Error(`Council setup completed, but the Tunnel runtime is ${runtime.status}${runtime.detail ? `: ${runtime.detail}` : ""}`);
+      return result;
+    } catch (error) {
+      const primary = error instanceof Error ? error.message : String(error);
+      const recovery = [];
+      try { await this.supervisor.stopForSetup(); } catch (caught) { recovery.push(`stopping failed Council runtime failed: ${caught instanceof Error ? caught.message : String(caught)}`); }
+      try { restoreRegularFile(configCheckpoint, this.platform); } catch (caught) { recovery.push(`restoring Council config failed: ${caught instanceof Error ? caught.message : String(caught)}`); }
+      this.supervisor.clearState();
+      if (previousWasCouncil) {
+        try {
+          const restored = await this.supervisor.startIfConfigured();
+          if (restored.status !== "ready") recovery.push(`previous Council runtime restored as ${restored.status}`);
+        } catch (caught) { recovery.push(`restarting previous Council runtime failed: ${caught instanceof Error ? caught.message : String(caught)}`); }
+      }
+      throw new Error([primary, ...recovery].join("; "));
+    } finally {
+      this.lifecycleOperation = null;
+      if (keyPath) fs.rmSync(keyPath, { force: true });
     }
-    const secretsDir = path.join(this.app.getPath("userData"), "secrets");
-    fs.mkdirSync(secretsDir, { recursive: true, mode: 0o700 });
-    try { fs.chmodSync(secretsDir, 0o700); } catch {}
-    const keyPath = path.join(secretsDir, `runtime-key-${randomBytes(16).toString("hex")}.tmp`);
-    fs.writeFileSync(keyPath, runtimeKey.trim(), { flag: "wx", mode: 0o600 });
-    args.push("--tunnel-id", tunnelId, "--runtime-key-file", keyPath);
-    return this.runSetup("council-setup", args, {
-      message: "Connecting ChatGPT Council",
-      successMessage: "ChatGPT Council runtime is ready",
-      timeoutMs: MCP_SETUP_TIMEOUT_MS,
-    }).finally(() => fs.rmSync(keyPath, { force: true }));
   }
 
+  setupMcp(options) { return this.setupCouncilMcp(options); }
+
   async upgradeManagedRuntime() {
-    if (!this.isCouncilRuntime()) return super.upgradeManagedRuntime();
+    if (!this.isCouncilRuntime()) return { updated: false };
     const existing = this.runtimeConfigSnapshot();
     if (existing.config?.releaseVersion === this.app.getVersion()) return { updated: false };
     const result = await this.setupCouncilMcp({ replace: false });
-    return {
-      updated: true,
-      mode: "full",
-      bridgeEnabled: false,
-      fromVersion: existing.config?.releaseVersion,
-      toVersion: this.app.getVersion(),
-      connectorMigrated: false,
-      stdout: result.stdout,
-    };
+    return { updated: true, mode: "full", bridgeEnabled: false, fromVersion: existing.config?.releaseVersion, toVersion: this.app.getVersion(), connectorMigrated: false, stdout: result.stdout };
   }
+
+  async setupCore() { throw new Error("Codex integration is not part of CodexWeb Council"); }
+  async bridgeStatus() { return { installed: false, active: false, changed: false }; }
+  async restoreBridgeRoute() { return { installed: false, active: false, changed: false }; }
+  async setBridgeEnabled() { throw new Error("Codex bridge routing is not part of CodexWeb Council"); }
+  async uninstallIntegration() { return { changed: false }; }
 }
 
-module.exports = {
-  ...legacy,
-  COUNCIL_CONNECTOR_NAME,
-  RuntimeHost,
-};
+module.exports = { ...legacy, COUNCIL_CONNECTOR_NAME, RuntimeHost };

@@ -9,7 +9,7 @@ export function CouncilSetupPanel() {
   const [tunnelId, setTunnelId] = useState("");
   const [runtimeKey, setRuntimeKey] = useState("");
   const [busy, setBusy] = useState(false);
-  const [message, setMessage] = useState("Connect the local Council runtime, then create one ChatGPT connector with the exact name below.");
+  const [message, setMessage] = useState("Connect the Secure MCP Tunnel to start the local Council service. On Plus, AI-to-AI writes use Electron + Playwright after you bind the Project chat as Lead.");
   const [verified, setVerified] = useState(false);
 
   useEffect(() => {
@@ -34,7 +34,7 @@ export function CouncilSetupPanel() {
     if (!api || busy) return;
     setBusy(true);
     setVerified(false);
-    setMessage(savedCredentials ? "Reconnecting the saved Council tunnel…" : "Installing and connecting the Council tunnel…");
+    setMessage(savedCredentials ? "Reconnecting the saved Council Tunnel…" : "Installing and connecting the Council Tunnel…");
     try {
       const result = savedCredentials
         ? await api.setupMcp({ replace: false })
@@ -43,7 +43,7 @@ export function CouncilSetupPanel() {
       const snapshot = await api.snapshot();
       setSavedCredentials(snapshot.mcpCredentialsConfigured);
       setRuntimeKey("");
-      setMessage(`Runtime connected. In ChatGPT Developer Mode create a new custom MCP connector named exactly “${COUNCIL_CONNECTOR}”, point it at this Tunnel, choose Authentication: None, and allow the Council write actions. Then press Verify.`);
+      setMessage(`Council service is online. Plus path: open your persistent Project chat in this Electron browser, then Agents → Bind current ChatGPT as Lead. Optional MCP path: create “${COUNCIL_CONNECTOR}” on the same Tunnel with Authentication: None, then Verify.`);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : String(error));
     } finally {
@@ -60,8 +60,8 @@ export function CouncilSetupPanel() {
       const report = await api.verifyMcp();
       setVerified(report.ok);
       setMessage(report.ok
-        ? `${COUNCIL_CONNECTOR} is connected. Normal ChatGPT conversations can now join rooms, discuss, decide, assign work, and wake one another.`
-        : report.checks.filter(check => check.status === "error").map(check => check.message).join(" · ") || "Council verification failed.");
+        ? `${COUNCIL_CONNECTOR} is connected. Full MCP-capable workspaces may use Council tools directly; Plus can continue to use the persistent Electron/Playwright Lead path.`
+        : report.checks.filter(check => check.status === "error").map(check => check.message).join(" · ") || "Council connector verification failed. The Plus browser path can still be used after the Tunnel service is online.");
     } catch (error) {
       setVerified(false);
       setMessage(error instanceof Error ? error.message : String(error));
@@ -80,11 +80,11 @@ export function CouncilSetupPanel() {
       {open && (
         <section className="council-setup-popover" role="dialog" aria-label="Connect ChatGPT Council">
           <div className="council-setup-head">
-            <div><strong>Connect ChatGPT Council</strong><span>No Codex model routing required</span></div>
+            <div><strong>Connect ChatGPT Council</strong><span>Standalone ChatGPT Council · no Codex routing</span></div>
             <button onClick={() => setOpen(false)} aria-label="Close">×</button>
           </div>
           <div className="council-setup-body">
-            <div className="council-setup-step"><i>1</i><div><strong>Secure MCP Tunnel</strong><p>The local server stays on your computer. OpenAI’s Secure MCP Tunnel carries the MCP connection without opening a router port.</p></div></div>
+            <div className="council-setup-step"><i>1</i><div><strong>Secure MCP Tunnel</strong><p>Starts the local Council service through OpenAI’s Tunnel without exposing a router port. Saved Tunnel credentials from the old app can be reused; no Codex config is read or modified.</p></div></div>
             {!savedCredentials && (
               <div className="council-setup-fields">
                 <label><span>Tunnel ID</span><input value={tunnelId} onChange={event => setTunnelId(event.target.value)} placeholder="tunnel_…" autoComplete="off" spellCheck={false} /></label>
@@ -93,10 +93,10 @@ export function CouncilSetupPanel() {
             )}
             <button className="council-primary-action" disabled={busy || (!savedCredentials && (!/^tunnel_[a-f0-9]{32}$/.test(tunnelId.trim()) || runtimeKey.trim().length < 20))} onClick={() => void connect()}>{busy ? "Working…" : savedCredentials ? "Reconnect saved tunnel" : "Connect Council runtime"}</button>
 
-            <div className="council-setup-step"><i>2</i><div><strong>Create the ChatGPT connector</strong><p>Create a new custom MCP connector named exactly:</p><code>{COUNCIL_CONNECTOR}</code><p>Use the same Tunnel, Authentication: None. Do not rename the old Codex Native connector because ChatGPT can cache connector schemas by identity.</p></div></div>
+            <div className="council-setup-step"><i>2</i><div><strong>Plus: bind your Project chat</strong><p>Open the persistent ChatGPT Project conversation in this Electron browser. Then open <b>Agents</b> and press <b>Bind current ChatGPT as Lead</b>. Lead/child communication is handled by Electron + Playwright, so it does not depend on MCP write actions.</p></div></div>
 
-            <div className="council-setup-step"><i>3</i><div><strong>Verify</strong><p>Verification checks the Council tunnel and the exact connector identity from the launcher-owned ChatGPT browser.</p></div></div>
-            <button className={`council-secondary-action${verified ? " verified" : ""}`} disabled={busy || !savedCredentials} onClick={() => void verify()}>{verified ? "✓ Council verified" : "Verify Council connector"}</button>
+            <div className="council-setup-step"><i>3</i><div><strong>Optional ChatGPT connector</strong><p>If your workspace exposes custom MCP capabilities, create a new connector named exactly:</p><code>{COUNCIL_CONNECTOR}</code><p>Use the same Tunnel and Authentication: None. Keep it as a separate identity instead of renaming an old connector.</p></div></div>
+            <button className={`council-secondary-action${verified ? " verified" : ""}`} disabled={busy || !savedCredentials} onClick={() => void verify()}>{verified ? "✓ Council connector verified" : "Verify Council connector (optional)"}</button>
             <div className={`council-setup-message${verified ? " success" : ""}`}>{message}</div>
           </div>
         </section>

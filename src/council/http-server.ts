@@ -1,3 +1,4 @@
+import { ownerBearerMatches } from "./owner-control";
 import type { PublicManagedAgent } from "./managed-runtime";
 import type { ManagedCouncilProject } from "./managed-project-state";
 import { CouncilStore } from "./store";
@@ -5,6 +6,7 @@ import type { CouncilAgent, CouncilDecision, CouncilMessage, CouncilRoom, Counci
 
 export const COUNCIL_HTTP_HOST = "127.0.0.1";
 export const COUNCIL_HTTP_DEFAULT_PORT = 17_842;
+const OWNER_BODY_LIMIT = 16 * 1024;
 
 export interface CouncilManagedPublicView {
   project: ManagedCouncilProject | null;
@@ -21,6 +23,11 @@ export interface CouncilPublicSnapshot {
   tasks: CouncilTask[];
   wakes: CouncilWakeEvent[];
   managed: CouncilManagedPublicView | null;
+}
+
+export interface CouncilOwnerApi {
+  token: () => string | undefined;
+  startLead: (input: { conversationUrl: string; projectName: string }) => Promise<unknown>;
 }
 
 export function buildCouncilPublicSnapshot(store: CouncilStore, managed: CouncilManagedPublicView | null = null): CouncilPublicSnapshot {
@@ -40,7 +47,7 @@ export function buildCouncilPublicSnapshot(store: CouncilStore, managed: Council
 
 function allowedRendererOrigin(request: Request): string | undefined {
   const origin = request.headers.get("origin");
-  if (origin === "null") return "null"; // packaged file:// Electron renderer
+  if (origin === "null") return "null";
   if (!origin) return undefined;
   try {
     const url = new URL(origin);
@@ -66,17 +73,47 @@ function configuredPort(): number {
   return value;
 }
 
+async function parseOwnerBody(request: Request): Promise<{ conversationUrl: string; projectName: string }> {
+  const length = Number(request.headers.get("content-length") ?? "0");
+  if (Number.isFinite(length) && length > OWNER_BODY_LIMIT) throw new Error("owner request is too large");
+  const text = await request.text();
+  if (Buffer.byteLength(text, "utf8") > OWNER_BODY_LIMIT) throw new Error("owner request is too large");
+  const body = JSON.parse(text) as Record<string, unknown>;
+  if (typeof body.conversation_url !== "string" || typeof body.project_name !== "string") throw new Error("owner request is invalid");
+  return { conversationUrl: body.conversation_url, projectName: body.project_name };
+}
+
 export function startCouncilHttpServer(
   store: CouncilStore,
-  options: { port?: number; onError?: (message: string) => void; managedSnapshot?: () => CouncilManagedPublicView | null } = {},
+  options: { port?: number; onError?: (message: string) => void; managedSnapshot?: () => CouncilManagedPublicView | null; owner?: CouncilOwnerApi } = {},
 ): ReturnType<typeof Bun.serve> | undefined {
   const port = options.port ?? configuredPort();
   try {
     return Bun.serve({
       hostname: COUNCIL_HTTP_HOST,
       port,
-      fetch(request) {
+      async fetch(request) {
         const url = new URL(request.url);
+
+        if (request.method === "POST" && url.pathname === "/api/owner/start-lead") {
+          // Owner control is intentionally not a browser API. Any Origin means the request came
+          // through a renderer/web page and is rejected even if it is local/file://.
+          if (request.headers.has("origin")) return new Response("Forbidden origin", { status: 403, headers: responseHeaders(undefined, "text/plain; charset=utf-8") });
+          const token = options.owner?.token();
+          if (!token || !ownerBearerMatches(token, request.headers.get("authorization"))) {
+            return new Response("Unauthorized", { status: 401, headers: responseHeaders(undefined, "text/plain; charset=utf-8") });
+          }
+          try {
+            const input = await parseOwnerBody(request);
+            const result = await options.owner!.startLead(input);
+            return Response.json({ ok: true, result }, { headers: responseHeaders() });
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            options.onError?.(`owner start-lead failed: ${message}`);
+            return Response.json({ ok: false, error: message }, { status: 400, headers: responseHeaders() });
+          }
+        }
+
         const origin = allowedRendererOrigin(request);
         const suppliedOrigin = request.headers.has("origin");
         if (suppliedOrigin && !origin) return new Response("Forbidden origin", { status: 403, headers: responseHeaders(undefined, "text/plain; charset=utf-8") });
