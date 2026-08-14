@@ -5,9 +5,7 @@ const { spawnSync } = require("node:child_process");
 
 const launcherRoot = path.resolve(__dirname, "..");
 const artifactsDirectory = path.join(launcherRoot, "artifacts");
-const launcherManifest = JSON.parse(
-  fs.readFileSync(path.join(launcherRoot, "package.json"), "utf8"),
-);
+const launcherManifest = JSON.parse(fs.readFileSync(path.join(launcherRoot, "package.json"), "utf8"));
 const expectedVersion = launcherManifest.version;
 const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "codex-web-gpt-package-smoke-"));
 const markerPath = path.join(scratch, "ready.json");
@@ -24,14 +22,35 @@ function boundedTail(filePath, maxChars = 6_000) {
   }
 }
 
-function smokeDiagnostics(result) {
+function diagnostics(result = {}) {
+  const installRoot = process.platform === "win32"
+    ? path.join(process.env.LOCALAPPDATA || "", "Programs", launcherManifest.name)
+    : "n/a";
+  let installTree = "n/a";
+  if (process.platform === "win32") {
+    try { installTree = fs.existsSync(installRoot) ? fs.readdirSync(installRoot).sort().join(", ") : "missing"; }
+    catch (error) { installTree = `unreadable:${error instanceof Error ? error.message : String(error)}`; }
+  }
   return [
+    `platform=${process.platform}/${process.arch}`,
+    `expectedVersion=${expectedVersion}`,
     `marker=${boundedTail(markerPath, 2_000)}`,
     `stdout=${JSON.stringify(result.stdout?.slice(-4_000) || "")}`,
     `stderr=${JSON.stringify(result.stderr?.slice(-4_000) || "")}`,
     `launcherLog=${boundedTail(path.join(launcherData, "logs", "launcher.jsonl"))}`,
+    `fatalLog=${boundedTail(path.join(launcherData, "logs", "launcher-fatal.log"))}`,
     `processLog=${boundedTail(path.join(launcherData, "logs", "process-stream-errors.log"))}`,
+    `installRoot=${installRoot}`,
+    `installTree=${installTree}`,
   ].join("\n");
+}
+
+function persistDiagnostics(error, result = {}) {
+  try {
+    fs.mkdirSync(artifactsDirectory, { recursive: true });
+    const file = path.join(artifactsDirectory, `smoke-diagnostics-${process.platform}-${process.arch}.txt`);
+    fs.writeFileSync(file, `error=${error instanceof Error ? error.stack || error.message : String(error)}\n${diagnostics(result)}\n`, "utf8");
+  } catch {}
 }
 
 function run(command, args, options = {}) {
@@ -43,22 +62,20 @@ function run(command, args, options = {}) {
     windowsHide: true,
   });
   if (result.error) {
-    throw new Error(`${result.error.message}\n${smokeDiagnostics(result)}`);
+    const error = new Error(`${result.error.message}\n${diagnostics(result)}`);
+    persistDiagnostics(error, result);
+    throw error;
   }
   if (result.status !== 0) {
-    throw new Error(
-      `${command} failed with status ${result.status}: ${result.stderr?.trim() || result.stdout?.trim() || "no output"}\n${smokeDiagnostics(result)}`,
-    );
+    const error = new Error(`${command} failed with status ${result.status}: ${result.stderr?.trim() || result.stdout?.trim() || "no output"}\n${diagnostics(result)}`);
+    persistDiagnostics(error, result);
+    throw error;
   }
 }
 
 function artifact(pattern, label) {
-  const matches = fs.readdirSync(artifactsDirectory)
-    .filter((name) => pattern.test(name))
-    .sort();
-  if (matches.length !== 1) {
-    throw new Error(`Expected exactly one ${label} in ${artifactsDirectory}; found ${matches.join(", ") || "none"}`);
-  }
+  const matches = fs.readdirSync(artifactsDirectory).filter(name => pattern.test(name)).sort();
+  if (matches.length !== 1) throw new Error(`Expected exactly one ${label} in ${artifactsDirectory}; found ${matches.join(", ") || "none"}`);
   return path.join(artifactsDirectory, matches[0]);
 }
 
@@ -95,12 +112,7 @@ try {
   } else if (process.platform === "win32") {
     const installer = artifact(/-win-x64\.exe$/, "Windows installer");
     run(installer, ["/S"], { timeout: 120_000 });
-    executable = path.join(
-      process.env.LOCALAPPDATA || "",
-      "Programs",
-      launcherManifest.name,
-      `${launcherManifest.build.productName}.exe`,
-    );
+    executable = path.join(process.env.LOCALAPPDATA || "", "Programs", launcherManifest.name, `${launcherManifest.build.productName}.exe`);
     command = executable;
     args = ["--launcher-smoke-test"];
   } else {
@@ -111,28 +123,18 @@ try {
   run(command, args, { env });
   if (!fs.existsSync(markerPath)) throw new Error("Packaged launcher did not write its readiness marker");
   const marker = JSON.parse(fs.readFileSync(markerPath, "utf8"));
-  if (marker.ok !== true
-    || marker.packaged !== true
-    || marker.runtimeVerified !== true
-    || marker.version !== expectedVersion
-    || marker.platform !== process.platform) {
+  if (marker.ok !== true || marker.packaged !== true || marker.runtimeVerified !== true || marker.version !== expectedVersion || marker.platform !== process.platform) {
     throw new Error(`Unexpected packaged launcher marker: ${JSON.stringify(marker)}`);
   }
-  const installedRuntime = path.join(
-    coreHome,
-    "versions",
-    `${expectedVersion}-${process.platform}-${process.arch}`,
-  );
-  const installedManifest = JSON.parse(
-    fs.readFileSync(path.join(installedRuntime, "manifest.json"), "utf8"),
-  );
-  if (installedManifest.appVersion !== expectedVersion
-    || installedManifest.platform !== process.platform
-    || installedManifest.arch !== process.arch
-    || !/^[a-f0-9]{64}$/.test(installedManifest.bundleId)) {
+  const installedRuntime = path.join(coreHome, "versions", `${expectedVersion}-${process.platform}-${process.arch}`);
+  const installedManifest = JSON.parse(fs.readFileSync(path.join(installedRuntime, "manifest.json"), "utf8"));
+  if (installedManifest.appVersion !== expectedVersion || installedManifest.platform !== process.platform || installedManifest.arch !== process.arch || !/^[a-f0-9]{64}$/.test(installedManifest.bundleId)) {
     throw new Error(`Packaged launcher installed the wrong durable runtime: ${JSON.stringify(installedManifest)}`);
   }
   process.stdout.write(`PACKAGED_LAUNCHER_SMOKE_OK ${process.platform}/${process.arch}\n`);
+} catch (error) {
+  persistDiagnostics(error);
+  throw error;
 } finally {
   fs.rmSync(scratch, { recursive: true, force: true });
 }
