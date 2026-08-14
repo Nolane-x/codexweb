@@ -20,12 +20,27 @@ export interface CouncilJoinResult {
   credentialIssued: boolean;
 }
 
+export interface CouncilVersionedSnapshot {
+  state: CouncilState;
+  revision: number;
+}
+
 export class CouncilStore {
   private state: CouncilState;
   private transactionDepth = 0;
   private transactionDirty = false;
+  private revision = 0;
+  private mutationListeners = new Set<(revision: number) => void>();
 
   constructor(private readonly path: string) { this.state = loadCouncilState(path); }
+
+  private publishMutation(): void {
+    this.revision += 1;
+    for (const listener of this.mutationListeners) {
+      try { listener(this.revision); }
+      catch { /* observers are transport hints and cannot invalidate an already-persisted mutation */ }
+    }
+  }
 
   private persist(): void {
     if (this.transactionDepth > 0) {
@@ -33,9 +48,16 @@ export class CouncilStore {
       return;
     }
     persistCouncilState(this.path, this.state);
+    this.publishMutation();
   }
 
   snapshot(): CouncilState { return structuredClone(this.state); }
+  snapshotWithRevision(): CouncilVersionedSnapshot { return { state: structuredClone(this.state), revision: this.revision }; }
+  currentRevision(): number { return this.revision; }
+  onMutation(listener: (revision: number) => void): () => void {
+    this.mutationListeners.add(listener);
+    return () => { this.mutationListeners.delete(listener); };
+  }
 
   /**
    * Run synchronous Council mutations against an isolated draft and persist at most once.
@@ -50,7 +72,10 @@ export class CouncilStore {
     this.transactionDirty = false;
     try {
       const result = work(this);
-      if (this.transactionDirty) persistCouncilState(this.path, this.state);
+      if (this.transactionDirty) {
+        persistCouncilState(this.path, this.state);
+        this.publishMutation();
+      }
       return result;
     } catch (error) {
       this.state = original;
