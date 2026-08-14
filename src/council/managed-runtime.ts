@@ -76,6 +76,11 @@ export class CouncilManagedRuntime {
     }
   }
 
+  saveManagedCheckpoint(agentId: string, summary: string): void {
+    if (!this.managed.get(agentId)) return;
+    this.managed.checkpoint(agentId, summary);
+  }
+
   startProject(actorAgentId: string, input: { roomId: string; name: string; mission: string; mandate: string }): { project: ManagedCouncilProject; lead: ManagedAgentRecord } {
     const actor = this.council.snapshot().agents.find(candidate => candidate.id === actorAgentId);
     if (!actor) throw new Error(`Council actor does not exist: ${actorAgentId}`);
