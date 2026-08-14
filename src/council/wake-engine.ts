@@ -4,6 +4,7 @@ import { CHATGPT_WEB_LUNA_MODEL_ID, CHATGPT_WEB_MODEL_ID, type ChatGptWebCapabil
 import { loadConfig, providerConfig, type AppConfig } from "../config";
 import { CouncilStore } from "./store";
 import type { CouncilContextPacket, CouncilWakeEvent } from "./types";
+import { normalizeCouncilWakeStatus } from "./work-operations";
 
 export const COUNCIL_CONNECTOR_NAME = "CodexWeb Council";
 
@@ -45,12 +46,14 @@ export class CouncilWakeEngine {
   constructor(private readonly store: CouncilStore, config: AppConfig = loadConfig()) { this.config = config; this.worker = ChatGptBrowserWorker.forProvider(wakeProvider(config)); }
   enqueue(wake: CouncilWakeEvent): void { const previous = this.tails.get(wake.targetAgentId) ?? Promise.resolve(); const next = previous.catch(() => {}).then(() => this.deliver(wake.id)); this.tails.set(wake.targetAgentId, next); void next.finally(() => { if (this.tails.get(wake.targetAgentId) === next) this.tails.delete(wake.targetAgentId); }).catch(() => {}); }
   private async deliver(wakeId: string): Promise<void> {
-    const initial = this.store.snapshot().wakes.find(candidate => candidate.id === wakeId); if (!initial || initial.status !== "pending") return;
+    const initial = this.store.snapshot().wakes.find(candidate => candidate.id === wakeId);
+    if (!initial || normalizeCouncilWakeStatus(initial.status) !== "queued") return;
     if (this.config.mode !== "full") { this.store.updateWake(wakeId, "failed", "Council wake delivery requires the Full MCP/tunnel mode"); return; }
     const target = initial.targetAgentId;
     let agentToken = "";
     try {
-      this.store.updateWake(wakeId, "delivering"); this.store.setAgentStatus(target, "awake");
+      this.store.updateWake(wakeId, "dispatched");
+      this.store.setAgentStatus(target, "awake");
       const packet = this.store.buildContextPacket({ agentId: target, roomId: initial.roomId, wakeId });
       agentToken = this.store.getAgentToken(target);
       const before = this.store.snapshot();
@@ -60,6 +63,7 @@ export class CouncilWakeEngine {
       const modelId = this.config.solAvailable ? CHATGPT_WEB_MODEL_ID : CHATGPT_WEB_LUNA_MODEL_ID;
       const reasoning = this.config.solAvailable ? "high" : "low";
       const deltas: string[] = [];
+      this.store.updateWake(wakeId, "target-running");
       const answer = await this.worker.run({ traceId: `councilwake_${randomUUID().replaceAll("-", "")}`, modelId, reasoning, capabilities, prepare: async () => ({ text: buildCouncilWakePrompt(packet, agentToken), images: [], release: () => {} }), onTextDelta: delta => deltas.push(delta) });
       const finalText = redactAgentToken(answer.trim() || deltas.join("").trim(), agentToken);
       const after = this.store.snapshot();
@@ -67,7 +71,8 @@ export class CouncilWakeEngine {
       if (authoredAfter === authoredBefore && finalText) this.store.say({ roomId: initial.roomId, authorAgentId: target, kind: "message", body: finalText.slice(0, 24_000), mentions: initial.sourceAgentId ? [initial.sourceAgentId] : [] });
       const checkpointAfter = this.store.snapshot().checkpoints.find(item => item.agentId === target && item.roomId === initial.roomId)?.updatedAt;
       if (checkpointAfter === checkpointBefore && finalText) this.store.checkpoint({ agentId: target, roomId: initial.roomId, summary: `Wake ${wakeId} completed.\n\n${finalText.slice(0, 20_000)}` });
-      this.store.updateWake(wakeId, "acknowledged"); this.store.setAgentStatus(target, "sleeping");
+      this.store.updateWake(wakeId, "replied");
+      this.store.setAgentStatus(target, "sleeping");
     } catch (error) {
       const raw = error instanceof Error ? error.message : String(error);
       const message = agentToken ? redactAgentToken(raw, agentToken) : raw;
