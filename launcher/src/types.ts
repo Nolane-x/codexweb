@@ -84,11 +84,28 @@ export interface SafeReason {
 }
 
 export interface CouncilAgentView { id: string; name: string; role: string; status: "awake" | "sleeping" | "offline"; joinedAt?: string; updatedAt: string }
+export type CouncilAgentPresenceView =
+  | { agentId: string; freshness: "unknown" }
+  | { agentId: string; lastSeenAt: string; leaseExpiresAt: string; freshness: "fresh" | "stale" };
 export interface CouncilRoomView { id: string; name: string; mission: string; createdAt?: string; updatedAt: string }
 export interface CouncilMessageView { id: string; roomId: string; authorAgentId: string; kind: "message" | "proposal" | "decision" | "system"; body: string; threadId: string; replyTo?: string; mentions: string[]; createdAt: string }
 export interface CouncilDecisionView { id: string; roomId: string; createdByAgentId: string; title: string; policy: string; rationale: string; unresolvedRisks: string[]; createdAt: string }
 export interface CouncilTaskView { id: string; roomId: string; assigneeAgentId?: string; title: string; description: string; status: "todo" | "claimed" | "in_progress" | "review" | "done" | "blocked"; updatedAt: string }
-export interface CouncilWakeView { id: string; targetAgentId: string; sourceAgentId?: string; roomId: string; reason: string; status: string; attempts: number; lastError?: string; updatedAt: string }
+export type CouncilWakeStatusView = "queued" | "dispatched" | "target-running" | "replied" | "failed" | "expired" | "pending" | "delivering" | "acknowledged";
+export interface CouncilWakeTransitionView { status: CouncilWakeStatusView; at: string }
+export interface CouncilWakeView {
+  id: string;
+  targetAgentId: string;
+  sourceAgentId?: string;
+  roomId: string;
+  reason: string;
+  status: CouncilWakeStatusView;
+  attempts: number;
+  lastError?: string;
+  expiresAt?: string;
+  transitions?: CouncilWakeTransitionView[];
+  updatedAt: string;
+}
 
 export interface RepoWorkspaceBindingView {
   schemaVersion: 1;
@@ -123,6 +140,7 @@ export interface CouncilSharedStateView {
   version: 1;
   generatedAt: string;
   agents: CouncilAgentView[];
+  presence: CouncilAgentPresenceView[];
   rooms: CouncilRoomView[];
   messages: CouncilMessageView[];
   decisions: CouncilDecisionView[];
