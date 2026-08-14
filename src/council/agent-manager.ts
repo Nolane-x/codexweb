@@ -11,6 +11,7 @@ interface CouncilStoreLike {
   snapshot(): CouncilState;
   transaction<T>(work: (store: CouncilStoreLike) => T): T;
   joinAgent(input: { id: string; name: string; role: string; status?: "awake" | "sleeping" | "offline" }): unknown;
+  touchAgentPresence(agentId: string): unknown;
   say(input: { roomId: string; authorAgentId: string; body: string; kind?: "message" | "proposal" | "decision" | "system"; replyTo?: string; mentions?: string[] }): { id: string };
   readRoom(roomId: string, limit?: number): CouncilState["messages"];
   createTask(input: { roomId: string; createdByAgentId: string; title: string; description: string; assigneeAgentId?: string }): CouncilState["tasks"][number];
@@ -173,6 +174,7 @@ export class CouncilAgentManager {
     const agent = this.requireManaged(agentId);
     const lease = this.registry.lease(agentId);
     if (lease.status === "queued") throw new Error(`Council agent ${agentId} is queued because all browser surfaces are busy`);
+    this.council.touchAgentPresence(agentId);
     onRunning?.();
     let effects: DeferredEffect[] = [];
     try {
@@ -198,6 +200,7 @@ export class CouncilAgentManager {
         parsed = this.parseAnswer(result.answer);
       }
       effects = this.applyActions(agentId, parsed, roomId);
+      this.council.touchAgentPresence(agentId);
     } finally {
       await this.transport.release(agentId).catch(() => false);
       this.registry.release(agentId);
