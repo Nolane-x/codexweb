@@ -17,7 +17,8 @@
     "package:win": "bun run build && bun run build:runtime && bun run scripts/package.cjs --win",
     "package:linux": "bun run build && bun run build:runtime && bun run scripts/package.cjs --linux",
     "smoke:package": "bun run scripts/smoke-package.cjs",
-    "test": "node --test tests/*.test.cjs",
+    "test": "node scripts/test-active.cjs",
+    "test:legacy": "node --test tests/runtime-host.test.cjs tests/renderer-wiring.test.cjs",
     "start": "electron ."
   },
   "dependencies": {
@@ -40,44 +41,12 @@
     "productName": "Codex Web GPT",
     "artifactName": "codex-web-gpt-${version}-${os}-${arch}.${ext}",
     "asar": true,
-    "directories": {
-      "output": "release"
-    },
-    "files": [
-      "dist/**",
-      "electron/**",
-      "assets/icon.png",
-      "package.json"
-    ],
-    "extraResources": [
-      {
-        "from": "build/runtime",
-        "to": "runtime"
-      }
-    ],
-    "mac": {
-      "category": "public.app-category.developer-tools",
-      "icon": "assets/icon.png",
-      "minimumSystemVersion": "13.0",
-      "hardenedRuntime": true,
-      "target": ["dmg", "zip"]
-    },
-    "win": {
-      "icon": "assets/icon.ico",
-      "target": ["nsis"]
-    },
-    "linux": {
-      "category": "Development",
-      "icon": "assets/icon.png",
-      "target": ["AppImage"]
-    },
-    "nsis": {
-      "oneClick": true,
-      "perMachine": false,
-      "allowElevation": false,
-      "createDesktopShortcut": true,
-      "createStartMenuShortcut": true,
-      "runAfterFinish": false
-    }
+    "directories": { "output": "release" },
+    "files": ["dist/**", "electron/**", "assets/icon.png", "package.json"],
+    "extraResources": [{ "from": "build/runtime", "to": "runtime" }],
+    "mac": { "category": "public.app-category.developer-tools", "icon": "assets/icon.png", "minimumSystemVersion": "13.0", "hardenedRuntime": true, "target": ["dmg", "zip"] },
+    "win": { "icon": "assets/icon.ico", "target": ["nsis"] },
+    "linux": { "category": "Development", "icon": "assets/icon.png", "target": ["AppImage"] },
+    "nsis": { "oneClick": true, "perMachine": false, "allowElevation": false, "createDesktopShortcut": true, "createStartMenuShortcut": true, "runAfterFinish": false }
   }
 }
