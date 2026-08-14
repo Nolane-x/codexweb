@@ -9,7 +9,7 @@ import {
 } from "../chatgpt-session";
 import { connectLauncherBrowserHost } from "../launcher-browser-host";
 import type { CouncilPersistentChatDriver } from "./browser-transport";
-import { CouncilConversationUnavailableError } from "./browser-transport";
+import { CouncilConversationUnavailableError, CouncilSurfaceUnavailableError } from "./browser-transport";
 import { assertChatGptConversationUrl } from "./conversation-registry";
 import { classifyConversationSurface } from "./playwright-council-surface";
 
@@ -148,6 +148,19 @@ async function waitForConversationUrl(page: Page, timeoutMs = 15_000): Promise<s
   throw new Error(`ChatGPT did not establish a persistent conversation URL (${page.url()})`);
 }
 
+function surfaceUnavailable(page: Page): boolean {
+  return page.isClosed() || page.url() === "about:blank";
+}
+
+async function navigateBeforeSubmit(page: Page, url: string): Promise<void> {
+  try {
+    await page.goto(url, { waitUntil: "domcontentloaded", timeout: PAGE_TIMEOUT_MS });
+  } catch (error) {
+    if (surfaceUnavailable(page)) throw new CouncilSurfaceUnavailableError(`Council browser surface unavailable before navigation completed (${page.url()})`);
+    throw error;
+  }
+}
+
 export class PlaywrightCouncilChatDriver implements CouncilPersistentChatDriver {
   constructor(private readonly descriptorPath: string) {}
 
@@ -156,15 +169,19 @@ export class PlaywrightCouncilChatDriver implements CouncilPersistentChatDriver 
     const connection = await connectLauncherBrowserHost(this.descriptorPath, PAGE_TIMEOUT_MS, input.surfaceId, input.signal);
     try {
       const page = connection.page;
-      if (page.url() !== expected) await page.goto(expected, { waitUntil: "domcontentloaded", timeout: PAGE_TIMEOUT_MS });
+      if (page.isClosed()) throw new CouncilSurfaceUnavailableError("Council browser surface closed before conversation resume");
+      if (page.url() !== expected) await navigateBeforeSubmit(page, expected);
       await new Promise(resolve => setTimeout(resolve, 250));
       const diagnostic = await bodyDiagnosticText(page);
       const surface = classifyConversationSurface(expected, page.url(), diagnostic);
+      if (surface === "surface-unavailable") throw new CouncilSurfaceUnavailableError(`Council browser surface unavailable before submit (${page.url()})`);
       if (surface === "unavailable") throw new CouncilConversationUnavailableError(`ChatGPT conversation is unavailable: ${expected}`);
       if (surface === "invalid") throw new Error(`ChatGPT persistent surface left the expected origin: ${page.url()}`);
       try { await visibleComposer(page); }
       catch (error) {
+        if (surfaceUnavailable(page)) throw new CouncilSurfaceUnavailableError(`Council browser surface unavailable before composer became ready (${page.url()})`);
         const state = classifyConversationSurface(expected, page.url(), await bodyDiagnosticText(page));
+        if (state === "surface-unavailable") throw new CouncilSurfaceUnavailableError(`Council browser surface unavailable before composer became ready (${page.url()})`);
         if (state === "unavailable") throw new CouncilConversationUnavailableError(`ChatGPT conversation is unavailable: ${expected}`);
         throw error;
       }
@@ -179,11 +196,16 @@ export class PlaywrightCouncilChatDriver implements CouncilPersistentChatDriver 
     const connection = await connectLauncherBrowserHost(this.descriptorPath, PAGE_TIMEOUT_MS, input.surfaceId, input.signal);
     try {
       const page = connection.page;
+      if (page.isClosed()) throw new CouncilSurfaceUnavailableError("Council browser surface closed before conversation creation");
       const current = new URL(page.url());
       if (current.origin !== "https://chatgpt.com" || current.pathname !== "/" || current.search) {
-        await page.goto(CHATGPT_HOME_URL, { waitUntil: "domcontentloaded", timeout: PAGE_TIMEOUT_MS });
+        await navigateBeforeSubmit(page, CHATGPT_HOME_URL);
       }
-      await visibleComposer(page);
+      try { await visibleComposer(page); }
+      catch (error) {
+        if (surfaceUnavailable(page)) throw new CouncilSurfaceUnavailableError(`Council browser surface unavailable before composer became ready (${page.url()})`);
+        throw error;
+      }
       const answer = await sendAndWait(page, input.prompt, input.signal);
       return { answer, conversationUrl: await waitForConversationUrl(page) };
     } finally {
