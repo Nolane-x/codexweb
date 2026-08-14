@@ -1,6 +1,7 @@
 import { randomBytes, timingSafeEqual } from "node:crypto";
-import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
+import { atomicWriteFile } from "../config";
 
 export interface CouncilOwnerControlDescriptor {
   version: 1;
@@ -20,8 +21,7 @@ export function issueCouncilOwnerControl(path: string, port: number): CouncilOwn
     token: randomBytes(32).toString("base64url"),
     issuedAt: new Date().toISOString(),
   };
-  writeFileSync(path, `${JSON.stringify(descriptor, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
-  try { chmodSync(path, 0o600); } catch {}
+  atomicWriteFile(path, `${JSON.stringify(descriptor, null, 2)}\n`);
   return descriptor;
 }
 
