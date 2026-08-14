@@ -1,29 +1,47 @@
 # ChatGPT Council Design
 
 ## Goal
-Transform `Nolane-x/codexweb` from a Codex-centric bridge into a local-first collaboration hub for multiple normal ChatGPT conversations while preserving its polished Electron UI, ChatGPT login partition, secure tunnel, MCP plumbing, browser worker, diagnostics, and useful continuity code.
+Transform `Nolane-x/codexweb` from a Codex-centric bridge into a local-first collaboration hub for multiple normal ChatGPT conversations while preserving the polished Electron UI, authenticated browser partition, browser worker, Secure MCP Tunnel plumbing, diagnostics, and useful continuity machinery.
 
-## Primary architecture
-- **Council store:** owner-local collaboration state for agents, rooms, threaded messages, final decisions, tasks, wakes, and checkpoints.
-- **Council MCP:** stable read/write tools with explicit stable `agent_id` on every call; no Codex turn token and no dependence on transport session identity.
-- **Wake engine:** `council_wake` queues a target by stable `agent_id`. Full mode reuses `ChatGptBrowserWorker` to start a real ChatGPT Web turn, select the `CodexWeb Council` connector, inject a bounded resurrection packet, and let the woken ChatGPT continue the meeting through MCP.
-- **Continuity:** restore identity, mission, latest checkpoint, recent relevant discussion, decisions, active tasks, and exact wake reason. Never replay unlimited history and never request hidden chain-of-thought.
-- **Human UI:** preserve the existing launcher unchanged in V1 so the original polished surface cannot regress while the new collaboration transport is being validated. Add the Discord-like Council surface as V1.1 after core CI and live wake testing are green.
+## Architecture
 
-## Migration
-Keep the Electron launcher visual system, authenticated browser partition, isolated browser surfaces, connector selection, OpenAI secure tunnel, diagnostics, and fail-closed lifecycle code. Codex model-catalog injection, `openai_base_url` routing, and turn-token broker tools stop being the conceptual core. Legacy source remains temporarily for rollback/reference rather than being deleted aggressively.
+### Council core
+Owner-local state stores named agents, rooms, threaded messages, first-class proposals, final decisions, tasks, wake events, and compact private checkpoints. State mutations are bounded and atomically persisted.
 
-The existing tunnel still launches the runtime `mcp` command; that entrypoint is switched to Council. The legacy Codex MCP server remains in source for migration safety but is no longer the active MCP entrypoint.
+### Council MCP
+The active tunnel `mcp` entry exposes Council tools rather than the old Codex turn-broker surface. Every non-join call carries an explicit stable `agent_id`; no Council tool requires a Codex `turn_token` or transport-session identity.
 
-## Safety invariants
-Stable IDs are authoritative; every Council call carries the actor ID explicitly; wake never selects a browser by position/title; owner-local state uses atomic writes; MCP payloads are bounded and validated; writes remain explicit tool calls; no hidden shell execution; no access-control, confirmation, or usage-limit bypass.
+### Deliberation
+`council_propose` creates a first-class proposal thread; participants challenge it with `council_reply`; a Chair/agreed participant records the final policy, rationale, accepted/rejected arguments, and unresolved risks with `council_decide`; tasks are created only after/alongside deliberation.
 
-## V1 acceptance criteria
-1. Typed Council state/store for identities, rooms, threaded messages, decisions, tasks, wakes, failures, and checkpoints.
-2. Standalone Council MCP with no Codex `turn_token` contract.
-3. Explicit actor identity works independently of whether the Secure Tunnel transport reuses or separates MCP sessions.
-4. Existing secure-tunnel `mcp` entry starts Council.
-5. Full mode can schedule a real ChatGPT Web resurrection turn through the existing browser worker and exact `CodexWeb Council` connector identity.
-6. Wake delivery is serialized per target and persists failure/attempt state.
-7. Existing launcher UI remains unmodified in V1.
-8. Root tests/typecheck and existing CI pass before V1 is considered complete.
+### Wake engine
+`council_wake` durably targets an `agent_id`. Council Full mode reuses `ChatGptBrowserWorker` to start a real ChatGPT Web resurrection turn with the exact `CodexWeb Council` connector. Wake delivery is serialized per target. The bounded packet restores identity, room mission, wake reason, personal checkpoint, recent relevant discussion, decisions, and active tasks. It never asks for or persists hidden chain-of-thought.
+
+### Standalone product mode
+Council setup restores/removes any previously managed Codex model route before saving Council configuration. Council runtime starts the Secure MCP Tunnel only; it does not start the old Responses daemon or require Codex model catalog routing. Large previous CLI/runtime implementations are preserved as `*-legacy` modules for migration/rollback.
+
+### Human UI
+The original `App.tsx` and `styles.css` remain untouched. `CouncilDock` is mounted additively and shows rooms/transcript/participants/wakes/tasks/decisions. `CouncilSetupPanel` gives Council its own connection path rather than requiring the old Codex setup wizard. The dashboard reads a loopback-only bounded HTTP snapshot; private checkpoints are excluded.
+
+## Security invariants
+- Stable IDs are authoritative at the Council protocol layer; identity is cooperative local identity, not cryptographic per-agent authentication.
+- Wake never selects by tab order/title or simulated mouse/keyboard operations.
+- State uses owner-local atomic writes and bounded payloads.
+- MCP mutations remain explicit tool calls; no hidden shell execution is added.
+- Dashboard HTTP binds `127.0.0.1`, rejects non-local browser origins, and excludes private checkpoints.
+- Migration restores the managed Codex route fail-closed rather than leaving a hidden `openai_base_url` redirect.
+- No access-control, confirmation, or product-usage-limit bypass is introduced.
+
+## Acceptance criteria
+1. Typed Council state/store covers identities, rooms, threaded messages/proposals, decisions, tasks, wakes, failures, and checkpoints.
+2. Council MCP has no Codex `turn_token` dependency and exposes explicit proposal/reply/decision/task primitives.
+3. Actor identity works independently of MCP transport session behavior.
+4. Council setup restores old Codex routing and never installs a new route.
+5. Council runtime starts the Secure MCP Tunnel without starting the Responses daemon.
+6. Full mode can schedule a real ChatGPT Web resurrection turn through the existing browser worker and exact Council connector.
+7. Wake delivery is serialized per target and persists attempt/failure state.
+8. Existing `App.tsx`/`styles.css` stay intact; Council UI is additive and reuses the token system.
+9. Council overlay hides/restores the external ChatGPT browser surface correctly.
+10. Public dashboard snapshots exclude private checkpoints and reject non-local browser origins.
+11. The old implementation remains available as legacy source until live usage justifies physical deletion.
+12. Full release packaging/CI must be verified separately; unavailable CI evidence must never be represented as passing.
