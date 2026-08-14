@@ -22,9 +22,44 @@ export interface CouncilJoinResult {
 
 export class CouncilStore {
   private state: CouncilState;
+  private transactionDepth = 0;
+  private transactionDirty = false;
+
   constructor(private readonly path: string) { this.state = loadCouncilState(path); }
-  private persist(): void { persistCouncilState(this.path, this.state); }
+
+  private persist(): void {
+    if (this.transactionDepth > 0) {
+      this.transactionDirty = true;
+      return;
+    }
+    persistCouncilState(this.path, this.state);
+  }
+
   snapshot(): CouncilState { return structuredClone(this.state); }
+
+  /**
+   * Run synchronous Council mutations against an isolated draft and persist at most once.
+   * If validation or persistence fails, both in-memory state and the on-disk atomic file stay
+   * at the pre-transaction version. External side effects must run only after this returns.
+   */
+  transaction<T>(work: (store: CouncilStore) => T): T {
+    if (this.transactionDepth > 0) return work(this);
+    const original = this.state;
+    this.state = structuredClone(original);
+    this.transactionDepth = 1;
+    this.transactionDirty = false;
+    try {
+      const result = work(this);
+      if (this.transactionDirty) persistCouncilState(this.path, this.state);
+      return result;
+    } catch (error) {
+      this.state = original;
+      throw error;
+    } finally {
+      this.transactionDepth = 0;
+      this.transactionDirty = false;
+    }
+  }
 
   joinAgent(input: { id: string; name: string; role: string; status?: CouncilAgentStatus }, presentedToken?: string): CouncilJoinResult {
     const id = assertCouncilId(input.id, "agent id");
