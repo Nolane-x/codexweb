@@ -1,11 +1,14 @@
-export type CouncilConversationSurfaceState = "available" | "unavailable" | "invalid";
+export type CouncilConversationSurfaceState = "available" | "unavailable" | "surface-unavailable" | "invalid";
 
 export function classifyConversationSurface(expectedUrl: string, actualUrl: string, visibleText: string): CouncilConversationSurfaceState {
   let expected: URL;
-  let actual: URL;
-  try { expected = new URL(expectedUrl); actual = new URL(actualUrl); }
+  try { expected = new URL(expectedUrl); }
   catch { return "invalid"; }
   if (expected.protocol !== "https:" || expected.hostname !== "chatgpt.com" || !/^\/c\/[A-Za-z0-9_-]+$/.test(expected.pathname)) return "invalid";
+  if (actualUrl === "about:blank") return "surface-unavailable";
+  let actual: URL;
+  try { actual = new URL(actualUrl); }
+  catch { return "invalid"; }
   if (actual.protocol !== "https:" || actual.hostname !== "chatgpt.com") return "invalid";
   const missing = /conversation\s+(?:not found|unavailable)|unable to load (?:the )?conversation|couldn['’]t load (?:the )?conversation/i.test(visibleText);
   if (missing) return "unavailable";
