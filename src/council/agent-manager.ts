@@ -9,6 +9,7 @@ import type { CouncilState, CouncilWakeEvent } from "./types";
 
 interface CouncilStoreLike {
   snapshot(): CouncilState;
+  transaction<T>(work: (store: CouncilStoreLike) => T): T;
   joinAgent(input: { id: string; name: string; role: string; status?: "awake" | "sleeping" | "offline" }): unknown;
   say(input: { roomId: string; authorAgentId: string; body: string; kind?: "message" | "proposal" | "decision" | "system"; replyTo?: string; mentions?: string[] }): { id: string };
   readRoom(roomId: string, limit?: number): CouncilState["messages"];
@@ -25,9 +26,9 @@ interface RuntimeRegistryLike extends Pick<CouncilAgentRegistry, "get" | "regist
 interface BrowserTransportLike extends Pick<CouncilBrowserTransport, "run" | "release"> {}
 
 type DeferredEffect =
-  | { type: "wake"; source: string; target: string; roomId: string; reason: string; sourceMessageId?: string }
+  | { type: "deliver-wake"; wake: CouncilWakeEvent }
   | { type: "spawn"; source: string; roomId: string; input: { name: string; role: string; mandate: string; requestedAgentId?: string; permissions?: CouncilPermission[] } }
-  | { type: "review"; source: string; target: string; roomId: string; reason: string; taskId: string };
+  | { type: "managed-checkpoint"; source: string; summary: string };
 
 export interface CouncilAgentManagerOptions {
   council: CouncilStoreLike;
@@ -194,56 +195,62 @@ export class CouncilAgentManager {
     const snapshot = this.council.snapshot();
     for (const action of parsed.batch.actions) this.prevalidateAction(source, action, snapshot);
 
-    const effects: DeferredEffect[] = [];
-    let contentRecorded = false;
-    for (const action of parsed.batch.actions) {
-      switch (action.type) {
-        case "SAY":
-        case "PROPOSE":
-        case "REPLY": {
-          const body = !contentRecorded && parsed.visibleText.trim() ? parsed.visibleText.trim() : action.body;
-          this.council.say({
-            roomId: action.room_id,
-            authorAgentId: source.id,
-            kind: action.type === "PROPOSE" ? "proposal" : "message",
-            body,
-            ...(action.type === "REPLY" ? { replyTo: action.reply_to } : {}),
-            mentions: action.mentions ?? [],
-          });
-          contentRecorded = true;
-          break;
+    return this.council.transaction(() => {
+      const effects: DeferredEffect[] = [];
+      let contentRecorded = false;
+      for (const action of parsed.batch.actions) {
+        switch (action.type) {
+          case "SAY":
+          case "PROPOSE":
+          case "REPLY": {
+            const body = !contentRecorded && parsed.visibleText.trim() ? parsed.visibleText.trim() : action.body;
+            this.council.say({
+              roomId: action.room_id,
+              authorAgentId: source.id,
+              kind: action.type === "PROPOSE" ? "proposal" : "message",
+              body,
+              ...(action.type === "REPLY" ? { replyTo: action.reply_to } : {}),
+              mentions: action.mentions ?? [],
+            });
+            contentRecorded = true;
+            break;
+          }
+          case "WAKE": {
+            const wake = this.council.wake({ targetAgentId: action.target_agent_id, sourceAgentId: source.id, roomId: action.room_id, reason: action.reason, ...(action.source_message_id ? { sourceMessageId: action.source_message_id } : {}) });
+            effects.push({ type: "deliver-wake", wake });
+            break;
+          }
+          case "SPAWN_AGENT":
+            effects.push({ type: "spawn", source: source.id, roomId: defaultRoomId, input: { name: action.name, role: action.role, mandate: action.mandate, ...(action.requested_agent_id ? { requestedAgentId: action.requested_agent_id } : {}), ...(action.permissions ? { permissions: action.permissions } : {}) } });
+            break;
+          case "CREATE_TASK":
+            this.council.createTask({ roomId: action.room_id, createdByAgentId: source.id, title: action.title, description: action.description, ...(action.assignee_agent_id ? { assigneeAgentId: action.assignee_agent_id } : {}) });
+            break;
+          case "UPDATE_TASK":
+            this.council.updateTask({ taskId: action.task_id, actorAgentId: source.id, status: action.status, ...(action.assignee_agent_id ? { assigneeAgentId: action.assignee_agent_id } : {}) });
+            break;
+          case "REQUEST_REVIEW": {
+            this.council.updateTask({ taskId: action.task_id, actorAgentId: source.id, status: "review", assigneeAgentId: action.reviewer_agent_id });
+            const wake = this.council.wake({ targetAgentId: action.reviewer_agent_id, sourceAgentId: source.id, roomId: action.room_id, reason: `Review task ${action.task_id}: ${action.reason}` });
+            effects.push({ type: "deliver-wake", wake });
+            break;
+          }
+          case "FINAL_DECISION":
+            this.council.decide({ roomId: action.room_id, createdByAgentId: source.id, title: action.title, policy: action.policy, rationale: action.rationale, acceptedArguments: action.accepted_arguments ?? [], rejectedArguments: action.rejected_arguments ?? [], unresolvedRisks: action.unresolved_risks ?? [] });
+            break;
+          case "CHECKPOINT":
+            this.council.checkpoint({ agentId: source.id, roomId: action.room_id ?? defaultRoomId, summary: action.summary });
+            effects.push({ type: "managed-checkpoint", source: source.id, summary: action.summary });
+            break;
+          case "SLEEP":
+            break;
         }
-        case "WAKE":
-          effects.push({ type: "wake", source: source.id, target: action.target_agent_id, roomId: action.room_id, reason: action.reason, ...(action.source_message_id ? { sourceMessageId: action.source_message_id } : {}) });
-          break;
-        case "SPAWN_AGENT":
-          effects.push({ type: "spawn", source: source.id, roomId: defaultRoomId, input: { name: action.name, role: action.role, mandate: action.mandate, ...(action.requested_agent_id ? { requestedAgentId: action.requested_agent_id } : {}), ...(action.permissions ? { permissions: action.permissions } : {}) } });
-          break;
-        case "CREATE_TASK":
-          this.council.createTask({ roomId: action.room_id, createdByAgentId: source.id, title: action.title, description: action.description, ...(action.assignee_agent_id ? { assigneeAgentId: action.assignee_agent_id } : {}) });
-          break;
-        case "UPDATE_TASK":
-          this.council.updateTask({ taskId: action.task_id, actorAgentId: source.id, status: action.status, ...(action.assignee_agent_id ? { assigneeAgentId: action.assignee_agent_id } : {}) });
-          break;
-        case "REQUEST_REVIEW":
-          this.council.updateTask({ taskId: action.task_id, actorAgentId: source.id, status: "review", assigneeAgentId: action.reviewer_agent_id });
-          effects.push({ type: "review", source: source.id, target: action.reviewer_agent_id, roomId: action.room_id, reason: action.reason, taskId: action.task_id });
-          break;
-        case "FINAL_DECISION":
-          this.council.decide({ roomId: action.room_id, createdByAgentId: source.id, title: action.title, policy: action.policy, rationale: action.rationale, acceptedArguments: action.accepted_arguments ?? [], rejectedArguments: action.rejected_arguments ?? [], unresolvedRisks: action.unresolved_risks ?? [] });
-          break;
-        case "CHECKPOINT":
-          this.council.checkpoint({ agentId: source.id, roomId: action.room_id ?? defaultRoomId, summary: action.summary });
-          this.managed.checkpoint(source.id, action.summary);
-          break;
-        case "SLEEP":
-          break;
       }
-    }
-    if (!contentRecorded && parsed.visibleText.trim()) {
-      this.council.say({ roomId: defaultRoomId, authorAgentId: source.id, kind: "message", body: parsed.visibleText.trim(), mentions: [] });
-    }
-    return effects;
+      if (!contentRecorded && parsed.visibleText.trim()) {
+        this.council.say({ roomId: defaultRoomId, authorAgentId: source.id, kind: "message", body: parsed.visibleText.trim(), mentions: [] });
+      }
+      return effects;
+    });
   }
 
   private prevalidateAction(source: ManagedAgentRecord, action: CouncilBrowserAction, snapshot: CouncilState): void {
@@ -269,12 +276,12 @@ export class CouncilAgentManager {
 
   private async executeEffects(effects: DeferredEffect[], depth: number): Promise<void> {
     for (const effect of effects) {
-      if (effect.type === "wake") {
-        await this.wakeAgent(effect.source, effect.target, effect.roomId, effect.reason, effect.sourceMessageId, depth + 1);
+      if (effect.type === "deliver-wake") {
+        await this.enqueueWakeEvent(effect.wake, depth);
       } else if (effect.type === "spawn") {
         await this.spawnAgent(effect.source, effect.input, depth + 1, effect.roomId);
       } else {
-        await this.wakeAgent(effect.source, effect.target, effect.roomId, `Review task ${effect.taskId}: ${effect.reason}`, undefined, depth + 1);
+        this.managed.checkpoint(effect.source, effect.summary);
       }
     }
   }
