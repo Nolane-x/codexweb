@@ -1,7 +1,11 @@
 export type CouncilAgentStatus = "awake" | "sleeping" | "offline";
 export type CouncilMessageKind = "message" | "proposal" | "decision" | "system";
 export type CouncilTaskStatus = "todo" | "claimed" | "in_progress" | "review" | "done" | "blocked";
-export type CouncilWakeStatus = "pending" | "delivering" | "acknowledged" | "failed";
+/**
+ * Canonical vNext wake states are queued/dispatched/target-running/replied/failed/expired.
+ * Legacy states remain accepted during the staged migration and are normalized in later slices.
+ */
+export type CouncilWakeStatus = "queued" | "dispatched" | "target-running" | "replied" | "failed" | "expired" | "pending" | "delivering" | "acknowledged";
 
 export interface CouncilAgent {
   id: string;
@@ -68,6 +72,11 @@ export interface CouncilTask {
   updatedAt: string;
 }
 
+export interface CouncilWakeTransition {
+  status: CouncilWakeStatus;
+  at: string;
+}
+
 export interface CouncilWakeEvent {
   id: string;
   targetAgentId: string;
@@ -78,6 +87,8 @@ export interface CouncilWakeEvent {
   status: CouncilWakeStatus;
   attempts: number;
   lastError?: string;
+  expiresAt: string;
+  transitions: CouncilWakeTransition[];
   createdAt: string;
   updatedAt: string;
 }
