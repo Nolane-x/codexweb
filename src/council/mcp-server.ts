@@ -40,8 +40,8 @@ export function createCouncilMcpServer(store: CouncilStore, options: CouncilMcpS
     if (!explicit || !token) throw new Error("Every Council call requires agent_id and agent_token; call council_join first and keep the private capability it returns");
     return store.authenticateAgent(explicit, token).id;
   };
-  registerCouncilDiscussionTools(server, store, resolveActor);
-  registerCouncilWorkTools(server, store, resolveActor, options.wakeDelivery);
+  registerCouncilDiscussionTools(server, store, resolveActor, options.managedRuntime);
+  registerCouncilWorkTools(server, store, resolveActor, options.wakeDelivery, options.managedRuntime);
   if (options.managedRuntime) registerCouncilManagedTools(server, options.managedRuntime, resolveActor);
   return server;
 }
