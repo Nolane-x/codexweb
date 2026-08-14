@@ -1,3 +1,4 @@
+import { isActiveCouncilWake } from "./store";
 import type { CouncilState } from "./types";
 
 export interface CouncilDecisionGateResult {
@@ -13,7 +14,7 @@ export function evaluateCouncilDecisionGate(state: CouncilState, roomId: string)
   const blockedTasks = state.tasks.filter(task => task.roomId === roomId && task.status === "blocked");
   if (blockedTasks.length > 0) reasons.push(`${blockedTasks.length} blocked task(s) remain unresolved`);
 
-  const activeWakes = state.wakes.filter(wake => wake.roomId === roomId && (wake.status === "pending" || wake.status === "delivering"));
+  const activeWakes = state.wakes.filter(wake => wake.roomId === roomId && isActiveCouncilWake(wake));
   if (activeWakes.length > 0) reasons.push(`${activeWakes.length} Council wake/review request(s) are still active`);
 
   return { ready: reasons.length === 0, reasons };

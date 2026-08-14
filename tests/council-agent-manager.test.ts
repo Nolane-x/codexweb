@@ -7,6 +7,7 @@ import { ManagedAgentStateStore } from "../src/council/managed-agent-state";
 
 class FakeCouncil {
   state: any = { version: 1, agents: [], credentials: [], rooms: [{ id: "core", name: "Core", mission: "Build", createdAt: "", updatedAt: "" }], messages: [], tasks: [], decisions: [], wakes: [], checkpoints: [] };
+  wakeTransitions: string[] = [];
   snapshot() { return structuredClone(this.state); }
   transaction<T>(work: (store: FakeCouncil) => T): T { const before = structuredClone(this.state); try { return work(this); } catch (error) { this.state = before; throw error; } }
   joinAgent(input: any) { if (!this.state.agents.some((agent: any) => agent.id === input.id)) this.state.agents.push({ ...input, joinedAt: "", updatedAt: "" }); return { agent: input, agentToken: "x", credentialIssued: true }; }
@@ -15,8 +16,28 @@ class FakeCouncil {
   createTask(input: any) { const task = { id: `t${this.state.tasks.length + 1}`, status: "todo", createdAt: "", updatedAt: "", ...input }; this.state.tasks.push(task); return task; }
   updateTask(input: any) { const task = this.state.tasks.find((candidate: any) => candidate.id === input.taskId); if (!task) throw new Error("task does not exist"); Object.assign(task, { status: input.status, assigneeAgentId: input.assigneeAgentId ?? task.assigneeAgentId }); return task; }
   decide(input: any) { const decision = { id: `d${this.state.decisions.length + 1}`, createdAt: "", ...input }; this.state.decisions.push(decision); return decision; }
-  wake(input: any) { const wake = { id: `w${this.state.wakes.length + 1}`, status: "pending", attempts: 0, createdAt: new Date().toISOString(), updatedAt: "", ...input }; this.state.wakes.push(wake); return wake; }
-  updateWake(id: string, status: string, lastError?: string) { const wake = this.state.wakes.find((candidate: any) => candidate.id === id); wake.status = status; if (lastError) wake.lastError = lastError; return wake; }
+  wake(input: any) {
+    const createdAt = new Date().toISOString();
+    const wake = {
+      id: `w${this.state.wakes.length + 1}`,
+      status: "queued",
+      attempts: 0,
+      expiresAt: new Date(Date.parse(createdAt) + 300_000).toISOString(),
+      transitions: [{ status: "queued", at: createdAt }],
+      createdAt,
+      updatedAt: createdAt,
+      ...input,
+    };
+    this.state.wakes.push(wake);
+    return wake;
+  }
+  updateWake(id: string, status: string, lastError?: string) {
+    const wake = this.state.wakes.find((candidate: any) => candidate.id === id);
+    wake.status = status;
+    this.wakeTransitions.push(status);
+    if (lastError) wake.lastError = lastError;
+    return wake;
+  }
   checkpoint(input: any) { const checkpoint = { updatedAt: "", ...input }; this.state.checkpoints.push(checkpoint); return checkpoint; }
   buildContextPacket(input: any) { return { identity: this.state.agents.find((agent: any) => agent.id === input.agentId), room: this.state.rooms.find((room: any) => room.id === input.roomId), recentMessages: this.readRoom(input.roomId, 12), decisions: this.state.decisions, tasks: this.state.tasks, generatedAt: "", instruction: "" }; }
 }
@@ -50,7 +71,7 @@ describe("CouncilAgentManager", () => {
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 
-  test("managed wake resumes an existing conversation and acknowledges the durable wake", async () => {
+  test("managed wake records dispatched, target-running and replied around the persistent response", async () => {
     const root = mkdtempSync(join(tmpdir(), "manager-"));
     try {
       const managed = new ManagedAgentStateStore(join(root, "agents.json"));
@@ -66,7 +87,8 @@ describe("CouncilAgentManager", () => {
       await manager.wakeAgent("alice", "bob", "core", "Review this");
       expect(calls[0].conversationUrl).toBe("https://chatgpt.com/c/bob");
       expect(calls[0].resurrectionPrompt).toContain("Review this");
-      expect(council.state.wakes[0].status).toBe("acknowledged");
+      expect(council.wakeTransitions).toEqual(["dispatched", "target-running", "replied"]);
+      expect(council.state.wakes[0].status).toBe("replied");
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 
