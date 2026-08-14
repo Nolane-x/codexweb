@@ -64,7 +64,9 @@ export function CouncilDock() {
   const stale = syncState === "stale";
   const syncError = syncState === "error";
   const snapshot = sharedSnapshot(runtime);
-  const lastSyncedAt = live || stale ? runtime?.projection.lastSyncedAt : undefined;
+  const lastSyncedAt = runtime?.projection.syncState === "live" || runtime?.projection.syncState === "stale"
+    ? runtime.projection.lastSyncedAt
+    : undefined;
   const managedProject = runtime?.managedProject;
   const capabilities = runtime?.capabilities;
   const localExecutionAvailable = Boolean(capabilities?.secureTunnel.available || capabilities?.localRepo.available || capabilities?.fullMcp.available);
