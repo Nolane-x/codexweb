@@ -56,6 +56,26 @@ export class CouncilManagedRuntime {
     });
   }
 
+  authorizeManaged(agentId: string, permission: CouncilPermission): void {
+    const agent = this.managed.get(agentId);
+    if (!agent) return; // legacy/unmanaged Council participants retain compatibility behavior.
+    if (!agent.permissions.includes(permission)) throw new Error(`Council agent ${agent.id} requires ${permission} permission`);
+  }
+
+  authorizeManagedTaskUpdate(agentId: string, taskId: string, assigneeAgentId?: string): void {
+    const agent = this.managed.get(agentId);
+    if (!agent) return;
+    if (assigneeAgentId !== undefined) {
+      this.authorizeManaged(agent.id, "assign");
+      return;
+    }
+    const task = this.council.snapshot().tasks.find(candidate => candidate.id === taskId);
+    if (!task) throw new Error(`Council task does not exist: ${taskId}`);
+    if (task.assigneeAgentId && task.assigneeAgentId !== agent.id && !agent.permissions.includes("assign")) {
+      throw new Error(`Council agent ${agent.id} cannot update another agent's task`);
+    }
+  }
+
   startProject(actorAgentId: string, input: { roomId: string; name: string; mission: string; mandate: string }): { project: ManagedCouncilProject; lead: ManagedAgentRecord } {
     const actor = this.council.snapshot().agents.find(candidate => candidate.id === actorAgentId);
     if (!actor) throw new Error(`Council actor does not exist: ${actorAgentId}`);
