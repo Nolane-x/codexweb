@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { effectivePresenceFreshness, presenceLabel } from "./council-presence";
 import type { CouncilRuntimeViewState, CouncilSharedStateView, CouncilTaskView, CouncilWakeStatusView } from "./types";
 
 function timeLabel(value?: string): string {
@@ -47,6 +48,7 @@ export function CouncilDock() {
   const [selectedRoomId, setSelectedRoomId] = useState<string | null>(null);
   const [messageFilter, setMessageFilter] = useState<"all" | "proposal">("all");
   const [followLatest, setFollowLatest] = useState(true);
+  const [presenceClockMs, setPresenceClockMs] = useState(() => Date.now());
   const restoreBrowser = useRef(false);
   const feedRef = useRef<HTMLDivElement | null>(null);
 
@@ -83,6 +85,13 @@ export function CouncilDock() {
     if (rooms.length === 0) { setSelectedRoomId(null); return; }
     if (!selectedRoomId || !rooms.some(room => room.id === selectedRoomId)) setSelectedRoomId(rooms[0]!.id);
   }, [snapshot, selectedRoomId]);
+
+  useEffect(() => {
+    if (!visible) return;
+    setPresenceClockMs(Date.now());
+    const timer = window.setInterval(() => setPresenceClockMs(Date.now()), 5_000);
+    return () => window.clearInterval(timer);
+  }, [visible]);
 
   useEffect(() => {
     if (!visible) return;
@@ -205,13 +214,13 @@ export function CouncilDock() {
                   <div className="council-agent-list">
                     {(snapshot?.agents ?? []).map(agent => {
                       const presence = presenceByAgent.get(agent.id);
-                      const presenceFreshness = presence?.freshness ?? "unknown";
+                      const presenceFreshness = effectivePresenceFreshness(presence, presenceClockMs);
                       const leaseExpiresAt = presence && presence.freshness !== "unknown" ? presence.leaseExpiresAt : undefined;
                       return (
                         <div className="council-agent" key={agent.id}>
-                          <div className="council-mini-avatar">{initials(agent.name)}<i className={agent.status} /></div>
+                          <div className="council-mini-avatar">{initials(agent.name)}<i className={`presence-${presenceFreshness}`} title={`Presence: ${presenceLabel(presenceFreshness)}`} /></div>
                           <div><strong>{agent.name}</strong><span>{agent.role}</span></div>
-                          <small>{agent.status} · {presenceFreshness}{leaseExpiresAt ? ` · lease ${timeLabel(leaseExpiresAt)}` : ""}</small>
+                          <small>status {agent.status} · presence {presenceLabel(presenceFreshness)}{leaseExpiresAt ? ` · lease ${timeLabel(leaseExpiresAt)}` : ""}</small>
                         </div>
                       );
                     })}
