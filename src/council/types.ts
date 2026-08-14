@@ -12,6 +12,10 @@ export interface CouncilAgent {
   updatedAt: string;
 }
 
+export type CouncilAgentPresence =
+  | { agentId: string; freshness: "unknown" }
+  | { agentId: string; lastSeenAt: string; leaseExpiresAt: string; freshness: "fresh" | "stale" };
+
 /** Private capability material. Never expose this array through the public dashboard or MCP status. */
 export interface CouncilAgentCredential {
   agentId: string;
