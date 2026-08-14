@@ -51,3 +51,11 @@ test("closing a persistent tab releases its binding", () => {
   assert.equal(host.turnTabs.size, 1);
   assert.equal(next.surfaceId, "surface-1");
 });
+
+test("explicit release closes a parked persistent surface", async () => {
+  const host = new CouncilHost();
+  host.beginTurn("trace_1", false, 10, "agent:alice");
+  await host.endTurn("trace_1", 10, "completed", false);
+  assert.equal(host.releaseAgentSurface("agent:alice"), true);
+  assert.equal(host.turnTabs.size, 0);
+});
