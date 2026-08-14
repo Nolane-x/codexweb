@@ -6,6 +6,7 @@ on:
   workflow_dispatch:
 
 permissions:
+  actions: write
   contents: write
 
 jobs:
@@ -19,6 +20,22 @@ jobs:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
+      - name: Cancel stale Release runs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          current="$GITHUB_RUN_ID"
+          mapfile -t stale_runs < <(
+            gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/release.yml/runs?per_page=100" \
+              --jq ".workflow_runs[] | select((.id | tostring) != \"${current}\" and .status != \"completed\") | .id"
+          )
+          for run_id in "${stale_runs[@]}"; do
+            echo "Cancelling stale Release run ${run_id}"
+            gh api --method POST "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/cancel" || true
+          done
+          if [ "${#stale_runs[@]}" -gt 0 ]; then sleep 5; fi
       - id: meta
         name: Resolve release version
         shell: bash
