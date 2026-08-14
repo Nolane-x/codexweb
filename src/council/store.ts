@@ -4,8 +4,21 @@ import { loadCouncilState, persistCouncilState } from "./state-file";
 import { assertCouncilId, councilNow, councilText, DEFAULT_RECENT_MESSAGES, MAX_COUNCIL_MESSAGES } from "./validation";
 import { addCouncilDecision, addCouncilTask, addCouncilWake, updateCouncilTask, updateCouncilWake } from "./work-operations";
 
-const MAX_ACTIVE_WAKES_PER_TARGET = 2;
+export const MAX_ACTIVE_WAKES_PER_TARGET = 2;
 const WAKE_SOURCE_TARGET_COOLDOWN_MS = 10_000;
+
+export function isActiveCouncilWake(wake: Pick<CouncilWakeEvent, "status">): boolean {
+  return wake.status === "pending" || wake.status === "delivering";
+}
+
+export function activeCouncilWakesForTarget(wakes: readonly CouncilWakeEvent[], targetAgentId: string): CouncilWakeEvent[] {
+  return wakes.filter(item => item.targetAgentId === targetAgentId && isActiveCouncilWake(item));
+}
+
+export function councilWakeCapacity(wakes: readonly CouncilWakeEvent[], targetAgentId: string): { active: number; max: number; available: number } {
+  const active = activeCouncilWakesForTarget(wakes, targetAgentId).length;
+  return { active, max: MAX_ACTIVE_WAKES_PER_TARGET, available: Math.max(0, MAX_ACTIVE_WAKES_PER_TARGET - active) };
+}
 
 function capabilityToken(): string { return randomBytes(32).toString("base64url"); }
 function tokenEqual(left: string, right: string): boolean {
@@ -154,7 +167,7 @@ export class CouncilStore {
   wake(input: { targetAgentId: string; roomId: string; reason: string; sourceAgentId?: string; sourceMessageId?: string }): CouncilWakeEvent {
     this.requireAgent(input.targetAgentId); this.requireRoom(input.roomId); if (input.sourceAgentId) this.requireAgent(input.sourceAgentId);
     if (input.sourceMessageId) { const source = this.state.messages.find(message => message.id === input.sourceMessageId); if (!source || source.roomId !== input.roomId) throw new Error("sourceMessageId does not identify a message in the room"); }
-    const activeForTarget = this.state.wakes.filter(item => item.targetAgentId === input.targetAgentId && (item.status === "pending" || item.status === "delivering"));
+    const activeForTarget = activeCouncilWakesForTarget(this.state.wakes, input.targetAgentId);
     if (activeForTarget.length >= MAX_ACTIVE_WAKES_PER_TARGET) throw new Error(`Wake queue for ${input.targetAgentId} is full; wait for an existing wake to complete`);
     if (input.sourceAgentId) {
       const now = Date.now();
