@@ -4,6 +4,7 @@ import type { PublicManagedAgent } from "./managed-runtime";
 import type { ManagedCouncilProject } from "./managed-project-state";
 import { CouncilStore } from "./store";
 import type { CouncilAgent, CouncilAgentPresence, CouncilDecision, CouncilMessage, CouncilRoom, CouncilState, CouncilTask, CouncilWakeEvent } from "./types";
+import { normalizeCouncilWakeStatus } from "./work-operations";
 
 export const COUNCIL_HTTP_HOST = "127.0.0.1";
 export const COUNCIL_HTTP_DEFAULT_PORT = 17_842;
@@ -42,6 +43,14 @@ export interface CouncilOwnerApi {
   startLead: (input: { conversationUrl: string; projectName: string }) => Promise<unknown>;
 }
 
+function canonicalPublicWake(wake: CouncilWakeEvent): CouncilWakeEvent {
+  return {
+    ...wake,
+    status: normalizeCouncilWakeStatus(wake.status),
+    transitions: wake.transitions?.map(transition => ({ ...transition, status: normalizeCouncilWakeStatus(transition.status) })),
+  };
+}
+
 function buildCouncilPublicSnapshotFromState(state: CouncilState, presence: CouncilAgentPresence[], managed: CouncilManagedPublicView | null, generatedAt: string): CouncilPublicSnapshot {
   return {
     version: 1,
@@ -52,7 +61,7 @@ function buildCouncilPublicSnapshotFromState(state: CouncilState, presence: Coun
     messages: state.messages.slice(-600),
     decisions: state.decisions.slice(-120),
     tasks: state.tasks.slice(-300),
-    wakes: state.wakes.slice(-160),
+    wakes: state.wakes.slice(-160).map(canonicalPublicWake),
     managed: managed ? structuredClone(managed) : null,
   };
 }
