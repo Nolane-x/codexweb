@@ -1,10 +1,27 @@
 const { AgentSurfaceRegistry } = require("./agent-surface-registry.cjs");
 
+let currentCouncilBrowserHost = null;
+
+function getCurrentCouncilBrowserHost() { return currentCouncilBrowserHost; }
+
 function createCouncilBrowserHostClass(LegacyBrowserHost) {
   return class CouncilBrowserHost extends LegacyBrowserHost {
     constructor(options) {
       super(options);
       this.agentSurfaceRegistry = new AgentSurfaceRegistry({ maxSurfaces: 5 });
+      currentCouncilBrowserHost = this;
+    }
+
+    currentHomeConversationUrl() {
+      const contents = this.view?.webContents;
+      if (!contents || contents.isDestroyed()) throw new Error("ChatGPT browser is unavailable");
+      const value = contents.getURL();
+      let url;
+      try { url = new URL(value); } catch { throw new Error("Open a persistent ChatGPT conversation before binding it as Council Lead"); }
+      if (url.protocol !== "https:" || url.hostname !== "chatgpt.com" || !/^\/c\/[A-Za-z0-9_-]+$/.test(url.pathname) || url.username || url.password || url.search || url.hash) {
+        throw new Error("Open a persistent ChatGPT conversation before binding it as Council Lead");
+      }
+      return url.toString();
     }
 
     snapshot() {
@@ -101,7 +118,12 @@ function createCouncilBrowserHostClass(LegacyBrowserHost) {
       if (tab?.bindingKey && this.agentSurfaceRegistry) this.agentSurfaceRegistry.release(tab.bindingKey);
       return super.removeTurnTab(tab, abortRunning);
     }
+
+    async dispose(...args) {
+      if (currentCouncilBrowserHost === this) currentCouncilBrowserHost = null;
+      if (typeof super.dispose === "function") return await super.dispose(...args);
+    }
   };
 }
 
-module.exports = { createCouncilBrowserHostClass };
+module.exports = { createCouncilBrowserHostClass, getCurrentCouncilBrowserHost };
