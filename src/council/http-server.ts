@@ -3,7 +3,7 @@ import { ownerBearerMatches } from "./owner-control";
 import type { PublicManagedAgent } from "./managed-runtime";
 import type { ManagedCouncilProject } from "./managed-project-state";
 import { CouncilStore } from "./store";
-import type { CouncilAgent, CouncilDecision, CouncilMessage, CouncilRoom, CouncilState, CouncilTask, CouncilWakeEvent } from "./types";
+import type { CouncilAgent, CouncilAgentPresence, CouncilDecision, CouncilMessage, CouncilRoom, CouncilState, CouncilTask, CouncilWakeEvent } from "./types";
 
 export const COUNCIL_HTTP_HOST = "127.0.0.1";
 export const COUNCIL_HTTP_DEFAULT_PORT = 17_842;
@@ -21,6 +21,7 @@ export interface CouncilPublicSnapshot {
   version: 1;
   generatedAt: string;
   agents: CouncilAgent[];
+  presence: CouncilAgentPresence[];
   rooms: CouncilRoom[];
   messages: CouncilMessage[];
   decisions: CouncilDecision[];
@@ -41,11 +42,12 @@ export interface CouncilOwnerApi {
   startLead: (input: { conversationUrl: string; projectName: string }) => Promise<unknown>;
 }
 
-function buildCouncilPublicSnapshotFromState(state: CouncilState, managed: CouncilManagedPublicView | null, generatedAt: string): CouncilPublicSnapshot {
+function buildCouncilPublicSnapshotFromState(state: CouncilState, presence: CouncilAgentPresence[], managed: CouncilManagedPublicView | null, generatedAt: string): CouncilPublicSnapshot {
   return {
     version: 1,
     generatedAt,
     agents: state.agents,
+    presence,
     rooms: state.rooms,
     messages: state.messages.slice(-600),
     decisions: state.decisions.slice(-120),
@@ -56,7 +58,8 @@ function buildCouncilPublicSnapshotFromState(state: CouncilState, managed: Counc
 }
 
 export function buildCouncilPublicSnapshot(store: CouncilStore, managed: CouncilManagedPublicView | null = null): CouncilPublicSnapshot {
-  return buildCouncilPublicSnapshotFromState(store.snapshot(), managed, new Date().toISOString());
+  const generatedAt = new Date().toISOString();
+  return buildCouncilPublicSnapshotFromState(store.snapshot(), store.presenceSnapshot(generatedAt), managed, generatedAt);
 }
 
 function allowedRendererOrigin(request: Request): string | undefined {
@@ -138,7 +141,7 @@ export function startCouncilHttpServer(
     const generatedAt = new Date().toISOString();
     return {
       schemaVersion: 1,
-      state: buildCouncilPublicSnapshotFromState(versioned.state, managedView(), generatedAt),
+      state: buildCouncilPublicSnapshotFromState(versioned.state, store.presenceSnapshot(generatedAt), managedView(), generatedAt),
       cursor: encodeCursor(syncEpoch, versioned.revision),
       generatedAt,
     };
@@ -158,8 +161,6 @@ export function startCouncilHttpServer(
         const url = new URL(request.url);
 
         if (request.method === "POST" && url.pathname === "/api/owner/start-lead") {
-          // Owner control is intentionally not a browser API. Any Origin means the request came
-          // through a renderer/web page and is rejected even if it is local/file://.
           if (request.headers.has("origin")) return new Response("Forbidden origin", { status: 403, headers: responseHeaders(undefined, "text/plain; charset=utf-8") });
           const token = options.owner?.token();
           if (!token || !ownerBearerMatches(token, request.headers.get("authorization"))) {
@@ -201,7 +202,7 @@ export function startCouncilHttpServer(
 
           let waitMs: number;
           try { waitMs = syncWaitMilliseconds(url); }
-          catch (error) {
+          catch {
             return Response.json({ schemaVersion: 1, type: "invalid-request", reason: { code: "INVALID_WAIT" } }, { status: 400, headers: responseHeaders(origin) });
           }
 
