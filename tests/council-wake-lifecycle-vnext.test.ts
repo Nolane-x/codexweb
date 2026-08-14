@@ -4,6 +4,19 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { evaluateCouncilDecisionGate } from "../src/council/decision-gate";
 import { councilWakeCapacity, CouncilStore } from "../src/council/store";
+import { normalizeCouncilWakeStatus } from "../src/council/work-operations";
+
+test("legacy wake statuses normalize to the canonical observable lifecycle", () => {
+  expect(normalizeCouncilWakeStatus("pending")).toBe("queued");
+  expect(normalizeCouncilWakeStatus("delivering")).toBe("target-running");
+  expect(normalizeCouncilWakeStatus("acknowledged")).toBe("replied");
+  expect(normalizeCouncilWakeStatus("queued")).toBe("queued");
+  expect(normalizeCouncilWakeStatus("dispatched")).toBe("dispatched");
+  expect(normalizeCouncilWakeStatus("target-running")).toBe("target-running");
+  expect(normalizeCouncilWakeStatus("replied")).toBe("replied");
+  expect(normalizeCouncilWakeStatus("failed")).toBe("failed");
+  expect(normalizeCouncilWakeStatus("expired")).toBe("expired");
+});
 
 test("new wakes begin as an observable queued lifecycle with an expiry boundary", () => {
   const root = mkdtempSync(join(tmpdir(), "council-wake-vnext-"));
