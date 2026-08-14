@@ -8,6 +8,8 @@ const workspace = {
   schemaVersion: 1 as const,
   provider: "github" as const,
   repoId: "Nolane-x/codexweb",
+  owner: "Nolane-x",
+  name: "codexweb",
   defaultBranch: "main",
   baseCommit: "48a596a4fb0caa177ea2967e5c96bbb0c0aec7c3",
 };
@@ -43,7 +45,9 @@ describe("ManagedProjectStateStore", () => {
       expect(new ManagedProjectStateStore(path).get()?.workspace).toEqual(workspace);
 
       expect(() => bindWorkspace.call(store, { ...workspace, token: "github_pat_must_never_persist" })).toThrow(/workspace|field|metadata/i);
+      expect(() => bindWorkspace.call(store, { ...workspace, localPath: "C:\\secret\\checkout" })).toThrow(/workspace|field|metadata/i);
       expect(() => bindWorkspace.call(store, { ...workspace, baseCommit: "main" })).toThrow(/commit/i);
+      expect(() => bindWorkspace.call(store, { ...workspace, repoId: "Other/repo" })).toThrow(/repoId|identity/i);
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 });
