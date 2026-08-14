@@ -3,6 +3,14 @@ import type { CouncilDecision, CouncilState, CouncilTask, CouncilTaskStatus, Cou
 import { councilNow, councilStringList, councilText, MAX_COUNCIL_DECISIONS, MAX_COUNCIL_TASKS, MAX_COUNCIL_WAKES } from "./validation";
 
 export const COUNCIL_WAKE_EXPIRY_MS = 5 * 60_000;
+export type CanonicalCouncilWakeStatus = Exclude<CouncilWakeStatus, "pending" | "delivering" | "acknowledged">;
+
+export function normalizeCouncilWakeStatus(status: CouncilWakeStatus): CanonicalCouncilWakeStatus {
+  if (status === "pending") return "queued";
+  if (status === "delivering") return "target-running";
+  if (status === "acknowledged") return "replied";
+  return status;
+}
 
 export function addCouncilDecision(state: CouncilState, input: { roomId: string; createdByAgentId: string; title: string; policy: string; rationale: string; acceptedArguments?: string[]; rejectedArguments?: string[]; unresolvedRisks?: string[] }): CouncilDecision { const decision: CouncilDecision = { id: `decision_${randomUUID()}`, roomId: input.roomId, createdByAgentId: input.createdByAgentId, title: councilText(input.title, "decision title", 240), policy: councilText(input.policy, "decision policy", 12_000), rationale: councilText(input.rationale, "decision rationale", 12_000), acceptedArguments: councilStringList(input.acceptedArguments, "accepted arguments"), rejectedArguments: councilStringList(input.rejectedArguments, "rejected arguments"), unresolvedRisks: councilStringList(input.unresolvedRisks, "unresolved risks"), createdAt: councilNow() }; state.decisions.push(decision); if (state.decisions.length > MAX_COUNCIL_DECISIONS) state.decisions.splice(0, state.decisions.length - MAX_COUNCIL_DECISIONS); return decision; }
 export function addCouncilTask(state: CouncilState, input: { roomId: string; createdByAgentId: string; title: string; description: string; assigneeAgentId?: string }): CouncilTask { const stamp = councilNow(); const task: CouncilTask = { id: `task_${randomUUID()}`, roomId: input.roomId, createdByAgentId: input.createdByAgentId, ...(input.assigneeAgentId ? { assigneeAgentId: input.assigneeAgentId } : {}), title: councilText(input.title, "task title", 240), description: councilText(input.description, "task description", 8_000), status: "todo", createdAt: stamp, updatedAt: stamp }; state.tasks.push(task); if (state.tasks.length > MAX_COUNCIL_TASKS) state.tasks.splice(0, state.tasks.length - MAX_COUNCIL_TASKS); return task; }
