@@ -34,7 +34,7 @@ test("Council RuntimeSupervisor starts only the tunnel", async () => {
   assert.ok(!calls.some(call => call[0] === "startDaemon"));
 });
 
-test("Council RuntimeHost setupMcp dispatches council-setup", async () => {
+test("Council RuntimeHost setupCouncilMcp dispatches council-setup", async () => {
   const calls = [];
   const host = Object.create(RuntimeHost.prototype);
   Object.assign(host, {
@@ -46,7 +46,7 @@ test("Council RuntimeHost setupMcp dispatches council-setup", async () => {
       return { stdout: "ok" };
     },
   });
-  await host.setupMcp({ replace: false });
+  await host.setupCouncilMcp({ replace: false });
   assert.equal(calls.length, 1);
   assert.equal(calls[0].name, "council-setup");
   assert.equal(calls[0].args[0], "council-setup");
