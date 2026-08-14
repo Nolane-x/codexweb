@@ -1,3 +1,5 @@
+const { onCouncilRuntimeLiveChanged } = require("./council-runtime-evidence.cjs");
+
 const DEFAULT_PORT = 17_842;
 const DEFAULT_REQUEST_TIMEOUT_MS = 5_000;
 const DEFAULT_WAIT_MS = 15_000;
@@ -107,6 +109,10 @@ class CouncilConnectionSupervisor {
   constructor(options = {}) {
     this.client = options.client || createCouncilSyncClient(options.clientOptions);
     this.capabilitiesProvider = options.capabilities;
+    this.subscribeCapabilityChanges = typeof options.subscribeCapabilityChanges === "function"
+      ? options.subscribeCapabilityChanges
+      : onCouncilRuntimeLiveChanged;
+    this.capabilityUnsubscribe = null;
     this.publish = typeof options.publish === "function" ? options.publish : () => {};
     this.logger = options.logger;
     this.retryMs = Number.isFinite(options.retryMs) ? Math.max(100, Math.trunc(options.retryMs)) : DEFAULT_RETRY_MS;
@@ -118,10 +124,26 @@ class CouncilConnectionSupervisor {
       managedProject: { state: "unattached", reason: safeReason("PROJECT_UNATTACHED", false) },
       capabilities: normalizeCapabilities(this.capabilitiesProvider),
     };
+    this.ensureCapabilitySubscription();
   }
 
   snapshot() { return structuredClone(this.runtime); }
   emit() { this.publish(this.snapshot()); }
+
+  ensureCapabilitySubscription() {
+    if (this.capabilityUnsubscribe || typeof this.subscribeCapabilityChanges !== "function") return;
+    const unsubscribe = this.subscribeCapabilityChanges(() => { this.refreshCapabilities(); });
+    if (typeof unsubscribe === "function") this.capabilityUnsubscribe = unsubscribe;
+  }
+
+  refreshCapabilities() {
+    this.runtime = {
+      ...this.runtime,
+      capabilities: normalizeCapabilities(this.capabilitiesProvider),
+    };
+    this.emit();
+    return this.snapshot();
+  }
 
   applyEnvelope(envelope) {
     const value = validateSnapshotEnvelope(envelope);
@@ -227,6 +249,7 @@ class CouncilConnectionSupervisor {
 
   start() {
     if (this.running) return;
+    this.ensureCapabilitySubscription();
     this.running = true;
     this.abortController = new AbortController();
     void this.run(this.abortController.signal).finally(() => { this.running = false; this.abortController = null; });
@@ -235,6 +258,8 @@ class CouncilConnectionSupervisor {
   async stop() {
     this.abortController?.abort();
     this.running = false;
+    this.capabilityUnsubscribe?.();
+    this.capabilityUnsubscribe = null;
   }
 }
 
