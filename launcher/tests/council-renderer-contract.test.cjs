@@ -50,6 +50,12 @@ test("Council shared visibility distinguishes live, stale and sync-error state f
   assert.doesNotMatch(dock, /!online\s*&&\s*<EmptyState title=["']Council runtime is offline/);
 });
 
+test("Council wake cards expose canonical transition evidence", () => {
+  assert.match(dock, /wake\.transitions/);
+  assert.match(dock, /council-wake-timeline/);
+  assert.match(css, /\.council-wake-timeline/);
+});
+
 test("managed agents can select only the controller-provided agent tab", () => {
   assert.match(agents, /tab\.agentId/);
   assert.match(agents, /selectBrowserTab\(tab\.id\)/);
