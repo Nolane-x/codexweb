@@ -2,6 +2,7 @@ const legacy = require("./runtime-supervisor-legacy.cjs");
 
 const COUNCIL_CONNECTOR_NAME = "CodexWeb Council";
 
+function councilProduct() { return process.env.CODEXWEB_COUNCIL_PRODUCT === "1"; }
 function isCouncilConfig(config) {
   return config?.mode === "full" && config?.appName === COUNCIL_CONNECTOR_NAME;
 }
@@ -12,11 +13,18 @@ class RuntimeSupervisor extends legacy.RuntimeSupervisor {
     try {
       config = this.readConfig();
     } catch {
-      return super.startConfigured();
+      if (!councilProduct()) return super.startConfigured();
+      this.writeState("not-configured");
+      return { status: "not-configured" };
     }
-    if (!isCouncilConfig(config)) return super.startConfigured();
+    if (!isCouncilConfig(config)) {
+      if (!councilProduct()) return super.startConfigured();
+      // A legacy codexweb config is foreign to the Council product. Never start or migrate it.
+      this.writeState("not-configured");
+      return { status: "not-configured" };
+    }
     if (config.releaseVersion !== this.app.getVersion()) {
-      const detail = `Config requires ${config.releaseVersion}; launcher is ${this.app.getVersion()}`;
+      const detail = `Council config requires ${config.releaseVersion}; launcher is ${this.app.getVersion()}`;
       this.writeState("needs-setup", detail);
       return { status: "needs-setup", detail };
     }
@@ -45,10 +53,17 @@ class RuntimeSupervisor extends legacy.RuntimeSupervisor {
   }
 
   async recover(name) {
-    const config = this.readConfig();
-    if (!isCouncilConfig(config)) return super.recover(name);
-    if (this.stopping) return;
-    if (name !== "tunnel") return;
+    let config;
+    try { config = this.readConfig(); }
+    catch {
+      if (councilProduct()) return;
+      return super.recover(name);
+    }
+    if (!isCouncilConfig(config)) {
+      if (councilProduct()) return;
+      return super.recover(name);
+    }
+    if (this.stopping || name !== "tunnel") return;
     this.publishOperation?.({ name: "runtime-recovery", status: "running", message: "Restarting Council tunnel" });
     await this.startTunnel(config, "runtime-recovery");
     if (!this.tunnel || !await this.tunnelHealth(config)) throw new Error("Council tunnel is unavailable after recovery");
@@ -57,7 +72,7 @@ class RuntimeSupervisor extends legacy.RuntimeSupervisor {
   }
 
   async ownedRuntimeReady(config) {
-    if (!isCouncilConfig(config)) return super.ownedRuntimeReady(config);
+    if (!isCouncilConfig(config)) return councilProduct() ? false : super.ownedRuntimeReady(config);
     return Boolean(this.tunnel && await this.tunnelHealth(config));
   }
 }
