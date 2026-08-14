@@ -14,7 +14,6 @@ import {
   installTunnelClient,
 } from "../tunnel";
 import { VERSION } from "../version";
-import { removeManagedCodexRoute } from "./codex-route-removal";
 import { COUNCIL_CONNECTOR_NAME } from "./wake-engine";
 
 export interface CouncilSetupOptions {
@@ -28,12 +27,12 @@ export interface CouncilSetupResult {
   appName: string;
   configPath: string;
   reusedCredentials: boolean;
-  codexIntegrationRemoved: boolean;
 }
 
-function existingConfig(): AppConfig | undefined {
+function existingCouncilConfig(): AppConfig | undefined {
   if (!existsSync(getConfigPath())) return undefined;
-  return loadConfigForSetup();
+  const config = loadConfigForSetup();
+  return config.mode === "full" && config.appName === COUNCIL_CONNECTOR_NAME ? config : undefined;
 }
 
 export async function setupCouncil(options: CouncilSetupOptions): Promise<CouncilSetupResult> {
@@ -42,12 +41,14 @@ export async function setupCouncil(options: CouncilSetupOptions): Promise<Counci
     throw new Error(`Launcher browser descriptor does not exist: ${descriptorPath}`);
   }
 
-  const previous = existingConfig();
+  // Council owns only its own config and Tunnel credentials. It intentionally never reads,
+  // restores, migrates, or mutates ~/.codex/config.toml or the legacy Codex integration journal.
+  const previous = existingCouncilConfig();
   const freshCredentials = Boolean(options.tunnelId || options.runtimeKeyFile);
   if (freshCredentials && (!options.tunnelId || !options.runtimeKeyFile)) {
     throw new Error("Council setup requires both tunnelId and runtimeKeyFile when replacing tunnel credentials");
   }
-  if (!freshCredentials && (!previous || previous.mode !== "full" || !previous.tunnel)) {
+  if (!freshCredentials && (!previous || !previous.tunnel)) {
     throw new Error("Council setup needs a Tunnel ID and Tunnels Read + Use runtime key for first-time setup");
   }
 
@@ -60,10 +61,8 @@ export async function setupCouncil(options: CouncilSetupOptions): Promise<Counci
         profileName: "codexweb-council",
         alias: "codexweb-council",
       })
-    : base.tunnel!;
+    : previous!.tunnel!;
 
-  // The Council product must not leave the old Codex model route active.
-  const removed = removeManagedCodexRoute();
   const config: AppConfig = {
     ...base,
     version: 3,
@@ -82,7 +81,6 @@ export async function setupCouncil(options: CouncilSetupOptions): Promise<Counci
     appName: COUNCIL_CONNECTOR_NAME,
     configPath: getConfigPath(),
     reusedCredentials: !freshCredentials,
-    codexIntegrationRemoved: removed.changed,
   };
 }
 
