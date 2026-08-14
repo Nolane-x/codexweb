@@ -16,6 +16,12 @@ export interface CouncilManagedRuntimeOptions {
   parseAnswer: (text: string) => ParsedCouncilActionFooter;
 }
 
+export interface PublicManagedAgent extends Omit<ManagedAgentRecord, "conversationUrl" | "checkpoint"> {
+  conversationBound: boolean;
+  checkpointSaved: boolean;
+  runtimeStatus: "active" | "sleeping" | "queued" | "failed";
+}
+
 export class CouncilManagedRuntime {
   private readonly council: CouncilStore;
   private readonly managed: ManagedAgentStateStore;
@@ -37,10 +43,16 @@ export class CouncilManagedRuntime {
 
   activeProject(): ManagedCouncilProject | undefined { return this.project.get(); }
 
-  publicAgents(): Array<Omit<ManagedAgentRecord, "conversationUrl" | "checkpoint"> & { conversationBound: boolean; checkpointSaved: boolean }> {
+  publicAgents(): PublicManagedAgent[] {
     return this.managed.list().map(agent => {
       const { conversationUrl, checkpoint, ...publicAgent } = agent;
-      return { ...publicAgent, conversationBound: Boolean(conversationUrl), checkpointSaved: Boolean(checkpoint) };
+      const runtime = this.registry.get(agent.id);
+      return {
+        ...publicAgent,
+        conversationBound: Boolean(conversationUrl),
+        checkpointSaved: Boolean(checkpoint),
+        runtimeStatus: runtime?.status ?? "sleeping",
+      };
     });
   }
 
