@@ -87,8 +87,10 @@ export interface CouncilWakeEvent {
   status: CouncilWakeStatus;
   attempts: number;
   lastError?: string;
-  expiresAt: string;
-  transitions: CouncilWakeTransition[];
+  /** Added in Council vNext; legacy V1 persisted wakes may not have this field. */
+  expiresAt?: string;
+  /** Added in Council vNext; legacy V1 persisted wakes may not have this field. */
+  transitions?: CouncilWakeTransition[];
   createdAt: string;
   updatedAt: string;
 }
