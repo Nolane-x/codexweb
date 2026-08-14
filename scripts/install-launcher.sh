@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-REPOSITORY="${CODEX_WEB_GPT_REPOSITORY:-miuuyy/codex-chatgpt-web}"
+REPOSITORY="${CODEX_WEB_GPT_REPOSITORY:-Nolane-x/codexweb}"
 VERSION="${CODEX_WEB_GPT_VERSION:-}"
 OS="$(uname -s)"
 MACHINE="$(uname -m)"
@@ -58,9 +58,9 @@ curl -fsSL --retry 3 --retry-all-errors --connect-timeout 15 --max-time 60 \
   "$BASE_URL/checksums.txt" -o "$TEMP_DIR/checksums.txt"
 EXPECTED="$(awk -v asset="$ASSET" '$2 == asset { print $1 }' "$TEMP_DIR/checksums.txt")"
 if [ "$OS" = "Darwin" ]; then
-  ACTUAL="$(shasum -a 256 "$TEMP_DIR/$ASSET" | awk '{ print $1}')"
+  ACTUAL="$(shasum -a 256 "$TEMP_DIR/$ASSET" | awk '{ print $1 }')"
 else
-  ACTUAL="$(sha256sum "$TEMP_DIR/$ASSET" | awk '{ print $1}')"
+  ACTUAL="$(sha256sum "$TEMP_DIR/$ASSET" | awk '{ print $1 }')"
 fi
 if [ -z "$EXPECTED" ]; then
   echo "checksums.txt has no entry for $ASSET" >&2
