@@ -54,3 +54,28 @@ test("queued wakes remain active for capacity, decision gating and default resur
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("canonical runtime transitions are durably ordered and dispatch increments the delivery attempt", () => {
+  const root = mkdtempSync(join(tmpdir(), "council-wake-transitions-vnext-"));
+  try {
+    const store = new CouncilStore(join(root, "state.json"));
+    store.joinAgent({ id: "alice", name: "Alice", role: "Architect" });
+    store.ensureRoom({ id: "nolane", name: "Nolane", mission: "Review wake lifecycle" });
+
+    const wake = store.wake({ targetAgentId: "alice", roomId: "nolane", reason: "Resume review" });
+    store.updateWake(wake.id, "dispatched");
+    store.updateWake(wake.id, "target-running");
+    const replied = store.updateWake(wake.id, "replied") as any;
+
+    expect(replied.attempts).toBe(1);
+    expect(replied.transitions?.map((transition: any) => transition.status)).toEqual([
+      "queued",
+      "dispatched",
+      "target-running",
+      "replied",
+    ]);
+    expect(replied.transitions?.every((transition: any) => Number.isFinite(Date.parse(transition.at)))).toBe(true);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
