@@ -1,0 +1,16 @@
+.council-mini-avatar i.presence-fresh,
+.council-agent-row-avatar i.presence-fresh{
+  background:var(--green-300);
+  box-shadow:0 0 9px rgb(64 201 119 / 42%);
+}
+
+.council-mini-avatar i.presence-stale,
+.council-agent-row-avatar i.presence-stale{
+  background:var(--orange-300);
+}
+
+.council-mini-avatar i.presence-unknown,
+.council-agent-row-avatar i.presence-unknown{
+  background:var(--gray-500);
+  box-shadow:none;
+}
