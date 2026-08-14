@@ -13,6 +13,7 @@ export interface CouncilWakeDelivery { enqueue(wake: CouncilWakeEvent): void; }
 export interface CouncilManagedMcpAuthorizer {
   authorizeManaged(agentId: string, permission: CouncilPermission): void;
   authorizeManagedTaskUpdate(agentId: string, taskId: string, assigneeAgentId?: string): void;
+  saveManagedCheckpoint(agentId: string, summary: string): void;
 }
 
 export function assertAgentTokenNotExposed(agentToken: string, values: readonly unknown[]): void {
