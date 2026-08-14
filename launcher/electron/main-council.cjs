@@ -22,6 +22,7 @@ const browserHostModule = require("./browser-host.cjs");
 const controlServerModule = require("./control-server.cjs");
 const { createCouncilBrowserHostClass } = require("./council-browser-host.cjs");
 const { createCouncilBrowserControlServerClass } = require("./council-control-server.cjs");
+const { CouncilConnectionSupervisor } = require("./council-connection-supervisor.cjs");
 const { bindCurrentConversationAsLead } = require("./council-owner-client.cjs");
 const { getAutostart, setAutostart } = require("./autostart.cjs");
 const { createLogger, installProcessDiagnosticGuards, registerLoggedIpc } = require("./logging.cjs");
@@ -68,6 +69,7 @@ let browserHost = null;
 let browserControl = null;
 let runtimeHost = null;
 let runtimeSupervisor = null;
+let councilConnectionSupervisor = null;
 let updateController = null;
 let tray = null;
 let lastOperation = null;
@@ -173,17 +175,44 @@ function validateBounds(value) {
   return value;
 }
 function smokePassedForCurrentVersion(state) { return state.browserSmokePassed === true && state.browserSmokeVersion === app.getVersion(); }
+function capabilityState(available) {
+  return available
+    ? { available: true, state: "ready" }
+    : { available: false, state: "error", reason: { code: "CAPABILITY_UNAVAILABLE", retryable: true } };
+}
+function councilCapabilities(stateStore) {
+  const state = stateStore.read();
+  const tunnelReady = state.mcpRuntimeInstalled === true && state.mcpSetupComplete === true;
+  return {
+    secureTunnel: capabilityState(tunnelReady),
+    localRepo: capabilityState(false),
+    githubConnector: capabilityState(false),
+    fullMcp: capabilityState(tunnelReady),
+    wakeEngine: capabilityState(tunnelReady),
+  };
+}
+function councilRuntimeSnapshot() {
+  return councilConnectionSupervisor?.snapshot() ?? {
+    controlPlane: { state: "connecting" },
+    projection: { syncState: "idle" },
+    managedProject: { state: "unattached", reason: { code: "PROJECT_UNATTACHED", retryable: false } },
+    capabilities: {
+      secureTunnel: capabilityState(false), localRepo: capabilityState(false), githubConnector: capabilityState(false), fullMcp: capabilityState(false), wakeEngine: capabilityState(false),
+    },
+  };
+}
 
 function registerIpc({ logger, stateStore }) {
   const handle = (channel, handler) => registerLoggedIpc(ipcMain, logger, channel, handler);
   handle("launcher:snapshot", async () => ({
-    state: stateStore.read(), browser: browserHost?.snapshot() ?? null, connectorName: COUNCIL_CONNECTOR_NAME,
+    state: stateStore.read(), browser: browserHost?.snapshot() ?? null, councilRuntime: councilRuntimeSnapshot(), connectorName: COUNCIL_CONNECTOR_NAME,
     mcpCredentialsConfigured: runtimeHost?.mcpCredentialsConfigured() ?? false, logs: logger.recent(),
     urls: { github: GITHUB_URL, x: GITHUB_URL, connectors: CONNECTORS_URL, tunnels: TUNNELS_URL, keys: KEYS_URL },
     platform: process.platform, packaged: app.isPackaged, version: app.getVersion(),
     smokePassed: smokePassedThisSession || smokePassedForCurrentVersion(stateStore.read()), operation: lastOperation,
     update: updateController?.getState() ?? { status: "disabled" },
   }));
+  handle("launcher:council-runtime-snapshot", () => councilRuntimeSnapshot());
   handle("launcher:set-language", (_event, language) => stateStore.update({ language: language === "zh-CN" ? "zh-CN" : "en" }));
   handle("launcher:open-social", async (_event, target) => { if (target !== "github" && target !== "x") throw new Error("Unknown social target"); await openWebUrl(GITHUB_URL); return stateStore.update(target === "github" ? { githubOpened: true } : { xOpened: true }); });
   handle("launcher:complete-onboarding", (_event, language) => stateStore.update({ language: language === "zh-CN" ? "zh-CN" : "en", onboardingComplete: true, githubOpened: true, xOpened: true }));
@@ -239,6 +268,7 @@ async function requestQuit() {
   try {
     const active = runtimeHost?.currentOperation() || browserHost?.currentOperation();
     if (active) throw new Error(`Wait for ${active} to finish before quitting CodexWeb Council`);
+    await councilConnectionSupervisor?.stop();
     await runtimeSupervisor?.shutdown();
     quitting = true;
     await browserHost?.persistSession();
@@ -280,11 +310,13 @@ async function start() {
   browserControl = await new BrowserControlServer({ logger, getBrowserHost: () => browserHost, getPreferences: () => stateStore.read() }).start();
   runtimeSupervisor = new RuntimeSupervisor({ app, logger, sourceRoot: SOURCE_ROOT, installedRuntimeRoot, runtimeRootProvider, coreHome: CORE_HOME, browserDescriptorPath: BROWSER_DESCRIPTOR_PATH, publishOperation });
   runtimeHost = new RuntimeHost({ app, logger, sourceRoot: SOURCE_ROOT, installedRuntimeRoot, runtimeRootProvider, browserDescriptorPath: BROWSER_DESCRIPTOR_PATH, publishOperation, supervisor: runtimeSupervisor });
+  councilConnectionSupervisor = new CouncilConnectionSupervisor({ logger, capabilities: () => councilCapabilities(stateStore), publish: state => send("launcher:council-runtime", state) });
   browserHost = new BrowserHost({ window: mainWindow, descriptorPath: BROWSER_DESCRIPTOR_PATH, cdpPort, control: browserControl.descriptor(), getConnectorName: () => COUNCIL_CONNECTOR_NAME, helper: { executable: process.execPath, script: BROWSER_HELPER_PATH }, logger, publishState: state => send("launcher:browser-state", state) });
   await browserHost.ready();
   const updaterRuntimeRoot = runtimeRootProvider();
   updateController = createUpdateController({ currentVersion: app.getVersion(), platform: process.platform, arch: process.arch, packaged: app.isPackaged, executablePath: process.execPath, runtimeExecutable: updaterRuntimeRoot ? runtimeBundlePaths(updaterRuntimeRoot, process.platform).executable : null, logsDirectory: app.getPath("logs"), publish: state => send("launcher:update-state", state), logger });
   registerIpc({ logger, stateStore });
+  councilConnectionSupervisor.start();
   const trayAvailable = createTray(logger); if (startHidden && !trayAvailable) mainWindow.once("ready-to-show", showMainWindow);
 
   const smoke = process.argv.includes("--launcher-smoke-test");
@@ -300,7 +332,7 @@ async function start() {
     if (!markerPath || !path.isAbsolute(markerPath)) throw new Error("Packaged Council smoke test requires an absolute CODEX_WEB_GPT_SMOKE_FILE");
     fs.mkdirSync(path.dirname(markerPath), { recursive: true });
     fs.writeFileSync(markerPath, `${JSON.stringify({ ok: true, product: "codexweb-council", version: app.getVersion(), platform: process.platform, packaged: app.isPackaged, runtimeVerified: true })}\n`);
-    browserHost.destroy(); await browserControl.close(); mainWindow.destroy(); app.quit(); return;
+    await councilConnectionSupervisor.stop(); browserHost.destroy(); await browserControl.close(); mainWindow.destroy(); app.quit(); return;
   }
 
   void browserHost.refreshAuthentication().catch(error => logger.warn("browser.session_refresh_failed", { message: error instanceof Error ? error.message : String(error) }));
