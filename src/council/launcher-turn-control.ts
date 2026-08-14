@@ -36,5 +36,9 @@ export function createLauncherPersistentTurnControl(
     async end(input: { traceId: string; status: "completed" | "failed" | "aborted"; message?: string }) {
       await request("/v1/turn/end", { phase: "end", traceId: input.traceId, helperPid: process.pid, status: input.status, ...(input.message ? { message: input.message } : {}) });
     },
+    async release(input: { bindingKey: string }) {
+      const value = await request("/v1/agent/release", { bindingKey: input.bindingKey });
+      return value.released === true;
+    },
   };
 }
