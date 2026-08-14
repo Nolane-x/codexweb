@@ -33,28 +33,21 @@ class RuntimeHost extends legacy.RuntimeHost {
     return current.configured && current.mode === "full" && current.config?.appName === COUNCIL_CONNECTOR_NAME;
   }
 
-  mcpCredentialsConfigured() {
-    return this.isCouncilRuntime() && super.mcpCredentialsConfigured();
-  }
+  // Safe migration convenience: this reads only codexweb's own config and private Tunnel key file.
+  // It never consults CODEX_HOME, ~/.codex/config.toml, or the Codex integration journal.
+  mcpCredentialsConfigured() { return super.mcpCredentialsConfigured(); }
 
   mcpConnectorName() { return COUNCIL_CONNECTOR_NAME; }
   browserConnectorName() { return COUNCIL_CONNECTOR_NAME; }
 
   async doctor() {
     if (!this.isCouncilRuntime()) {
-      return { ok: false, checks: [{ id: "council-runtime", status: "warning", message: "Council Tunnel is optional and is not configured" }] };
+      return { ok: false, checks: [{ id: "council-runtime", status: "warning", message: "Connect the saved or new Secure MCP Tunnel to start the local Council service" }] };
     }
     try {
       const runtime = await this.supervisor.startIfConfigured();
       const ok = runtime.status === "ready";
-      return {
-        ok,
-        checks: [{
-          id: "council-runtime",
-          status: ok ? "ok" : "error",
-          message: ok ? "Council Secure MCP Tunnel is ready" : `Council runtime is ${runtime.status}${runtime.detail ? `: ${runtime.detail}` : ""}`,
-        }],
-      };
+      return { ok, checks: [{ id: "council-runtime", status: ok ? "ok" : "error", message: ok ? "Council Secure MCP Tunnel is ready" : `Council runtime is ${runtime.status}${runtime.detail ? `: ${runtime.detail}` : ""}` }] };
     } catch (error) {
       return { ok: false, checks: [{ id: "council-runtime", status: "error", message: error instanceof Error ? error.message : String(error) }] };
     }
@@ -63,19 +56,12 @@ class RuntimeHost extends legacy.RuntimeHost {
   async setupCouncilMcp({ tunnelId = "", runtimeKey = "", replace = false } = {}) {
     if (this.currentOperation()) throw new Error(`Another launcher operation is active: ${this.currentOperation()}`);
     const reuseSavedCredentials = replace !== true && this.mcpCredentialsConfigured();
-    if (!reuseSavedCredentials && !/^tunnel_[a-f0-9]{32}$/.test(tunnelId)) {
-      throw new Error("Tunnel ID must be tunnel_ followed by 32 lowercase hexadecimal characters");
-    }
-    if (!reuseSavedCredentials && (typeof runtimeKey !== "string" || runtimeKey.trim().length < 20)) {
-      throw new Error("A Tunnels Read + Use runtime key is required");
-    }
+    if (!reuseSavedCredentials && !/^tunnel_[a-f0-9]{32}$/.test(tunnelId)) throw new Error("Tunnel ID must be tunnel_ followed by 32 lowercase hexadecimal characters");
+    if (!reuseSavedCredentials && (typeof runtimeKey !== "string" || runtimeKey.trim().length < 20)) throw new Error("A Tunnels Read + Use runtime key is required");
 
-    // Council rollback owns only the codexweb config. It never snapshots or touches CODEX_HOME,
-    // ~/.codex/config.toml, model caches, or the legacy Codex integration journal.
+    // Rollback owns only codexweb's config. No Codex file is captured or restored.
     const configPath = this.supervisor.configPath;
-    if (typeof configPath !== "string" || !path.isAbsolute(configPath)) {
-      throw new Error("Council runtime supervisor has no absolute configuration path");
-    }
+    if (typeof configPath !== "string" || !path.isAbsolute(configPath)) throw new Error("Council runtime supervisor has no absolute configuration path");
     const configCheckpoint = snapshotRegularFile(configPath);
     const previousWasCouncil = this.isCouncilRuntime();
     const args = ["council-setup", "--browser-host-descriptor", this.browserDescriptorPath];
@@ -93,14 +79,12 @@ class RuntimeHost extends legacy.RuntimeHost {
     try {
       if (previousWasCouncil) await this.supervisor.stopForSetup();
       const result = await this.run("council-setup", args, {
-        message: reuseSavedCredentials ? "Reconnecting ChatGPT Council with saved tunnel credentials" : "Connecting ChatGPT Council",
-        successMessage: "ChatGPT Council configuration saved",
+        message: reuseSavedCredentials ? "Reconnecting Council with saved Tunnel credentials" : "Connecting Council Tunnel",
+        successMessage: "Council Tunnel configuration saved",
         timeoutMs: MCP_SETUP_TIMEOUT_MS,
       });
       const runtime = await this.supervisor.startIfConfigured();
-      if (runtime.status !== "ready") {
-        throw new Error(`Council setup completed, but the Tunnel runtime is ${runtime.status}${runtime.detail ? `: ${runtime.detail}` : ""}`);
-      }
+      if (runtime.status !== "ready") throw new Error(`Council setup completed, but the Tunnel runtime is ${runtime.status}${runtime.detail ? `: ${runtime.detail}` : ""}`);
       return result;
     } catch (error) {
       const primary = error instanceof Error ? error.message : String(error);
@@ -128,18 +112,9 @@ class RuntimeHost extends legacy.RuntimeHost {
     const existing = this.runtimeConfigSnapshot();
     if (existing.config?.releaseVersion === this.app.getVersion()) return { updated: false };
     const result = await this.setupCouncilMcp({ replace: false });
-    return {
-      updated: true,
-      mode: "full",
-      bridgeEnabled: false,
-      fromVersion: existing.config?.releaseVersion,
-      toVersion: this.app.getVersion(),
-      connectorMigrated: false,
-      stdout: result.stdout,
-    };
+    return { updated: true, mode: "full", bridgeEnabled: false, fromVersion: existing.config?.releaseVersion, toVersion: this.app.getVersion(), connectorMigrated: false, stdout: result.stdout };
   }
 
-  // Explicitly seal legacy Codex integration controls in the Council product.
   async setupCore() { throw new Error("Codex integration is not part of CodexWeb Council"); }
   async bridgeStatus() { return { installed: false, active: false, changed: false }; }
   async restoreBridgeRoute() { return { installed: false, active: false, changed: false }; }
@@ -147,8 +122,4 @@ class RuntimeHost extends legacy.RuntimeHost {
   async uninstallIntegration() { return { changed: false }; }
 }
 
-module.exports = {
-  ...legacy,
-  COUNCIL_CONNECTOR_NAME,
-  RuntimeHost,
-};
+module.exports = { ...legacy, COUNCIL_CONNECTOR_NAME, RuntimeHost };
