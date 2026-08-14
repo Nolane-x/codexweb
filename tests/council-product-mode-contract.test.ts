@@ -4,14 +4,16 @@ import { join } from "node:path";
 
 const root = join(import.meta.dir, "..");
 const councilSetup = readFileSync(join(root, "src", "council", "setup.ts"), "utf8");
+const routeRemoval = readFileSync(join(root, "src", "council", "codex-route-removal.ts"), "utf8");
 const cli = readFileSync(join(root, "src", "cli.ts"), "utf8");
 const launcherRuntime = readFileSync(join(root, "launcher", "electron", "runtime.cjs"), "utf8");
 const supervisor = readFileSync(join(root, "launcher", "electron", "runtime-supervisor.cjs"), "utf8");
 
 describe("Council product mode migration", () => {
   test("restores the old Codex route instead of installing a new one", () => {
-    expect(councilSetup).toContain("uninstallCodexIntegration");
-    expect(councilSetup).not.toContain("installCodexIntegration");
+    expect(councilSetup).toContain("removeManagedCodexRoute");
+    expect(routeRemoval).toContain("uninstallCodexIntegration");
+    expect(routeRemoval).not.toMatch(/\binstallCodexIntegration\b/);
     expect(councilSetup).not.toContain("preflightCodexIntegration");
     expect(councilSetup).toContain("COUNCIL_CONNECTOR_NAME");
   });
