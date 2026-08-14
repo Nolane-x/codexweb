@@ -2,6 +2,7 @@ import type { CouncilAgentRegistry } from "./agent-registry";
 import { CouncilAgentManager } from "./agent-manager";
 import type { CouncilBrowserTransport } from "./browser-transport";
 import type { ParsedCouncilActionFooter } from "./browser-actions";
+import { assertCouncilDecisionGate } from "./decision-gate";
 import { COUNCIL_PERMISSIONS, type CouncilPermission, type ManagedAgentRecord, type ManagedAgentStateStore } from "./managed-agent-state";
 import type { ManagedCouncilProject, ManagedProjectStateStore } from "./managed-project-state";
 import type { CouncilStore } from "./store";
@@ -62,6 +63,12 @@ export class CouncilManagedRuntime {
     if (!agent.permissions.includes(permission)) throw new Error(`Council agent ${agent.id} requires ${permission} permission`);
   }
 
+  authorizeManagedDecision(agentId: string, roomId: string): void {
+    if (!this.managed.get(agentId)) return;
+    this.authorizeManaged(agentId, "finalize");
+    assertCouncilDecisionGate(this.council.snapshot(), roomId);
+  }
+
   authorizeManagedTaskUpdate(agentId: string, taskId: string, assigneeAgentId?: string): void {
     const agent = this.managed.get(agentId);
     if (!agent) return;
@@ -82,14 +89,21 @@ export class CouncilManagedRuntime {
   }
 
   startProject(actorAgentId: string, input: { roomId: string; name: string; mission: string; mandate: string }): { project: ManagedCouncilProject; lead: ManagedAgentRecord } {
-    const actor = this.council.snapshot().agents.find(candidate => candidate.id === actorAgentId);
+    const councilSnapshot = this.council.snapshot();
+    const actor = councilSnapshot.agents.find(candidate => candidate.id === actorAgentId);
     if (!actor) throw new Error(`Council actor does not exist: ${actorAgentId}`);
     const existing = this.project.get();
     if (existing && (existing.leadAgentId !== actor.id || existing.roomId !== input.roomId)) {
       throw new Error(`Managed Council project ${existing.roomId} is already owned by lead ${existing.leadAgentId}`);
     }
-    if (!existing && this.managed.list().length > 0) {
-      throw new Error("Managed agent state already exists without an active project; reset or recover the managed project state before bootstrapping a new lead");
+    if (!existing) {
+      if (this.managed.list().length > 0) {
+        throw new Error("Managed agent state already exists without an active project; reset or recover the managed project state before bootstrapping a new lead");
+      }
+      const firstParticipant = [...councilSnapshot.agents].sort((left, right) => left.joinedAt.localeCompare(right.joinedAt) || left.id.localeCompare(right.id))[0];
+      if (!firstParticipant || firstParticipant.id !== actor.id) {
+        throw new Error(`Only the first Council participant may bootstrap the managed project lead; expected ${firstParticipant?.id ?? "none"}`);
+      }
     }
     const room = this.council.ensureRoom({ id: input.roomId, name: input.name, mission: input.mission });
     const project = this.project.start({ roomId: room.id, name: room.name, mission: room.mission, leadAgentId: actor.id });
