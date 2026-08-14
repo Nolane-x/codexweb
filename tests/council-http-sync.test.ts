@@ -39,6 +39,22 @@ describe("Council canonical sync contract", () => {
     } finally { cleanup(value); }
   });
 
+  test("normalizes legacy wake lifecycle at the public projection boundary", async () => {
+    const value = fixture();
+    try {
+      value.store.joinAgent({ id: "alice", name: "Alice", role: "Architect" });
+      value.store.ensureRoom({ id: "project", name: "Project", mission: "Ship vNext" });
+      const wake = value.store.wake({ targetAgentId: "alice", roomId: "project", reason: "legacy delivery" });
+      value.store.updateWake(wake.id, "delivering");
+
+      const response = await fetch(`${value.base}/api/sync/snapshot`);
+      const body = await response.json() as any;
+      const projected = body.state.wakes.find((item: any) => item.id === wake.id);
+      expect(projected.status).toBe("target-running");
+      expect(projected.transitions.map((transition: any) => transition.status)).toEqual(["queued", "target-running"]);
+    } finally { cleanup(value); }
+  });
+
   test("changes the opaque cursor when canonical Council state mutates", async () => {
     const value = fixture();
     try {
