@@ -12,6 +12,7 @@ export type ResolveCouncilActor = (extra: unknown, explicit?: string, token?: st
 export interface CouncilWakeDelivery { enqueue(wake: CouncilWakeEvent): void; }
 export interface CouncilManagedMcpAuthorizer {
   authorizeManaged(agentId: string, permission: CouncilPermission): void;
+  authorizeManagedDecision(agentId: string, roomId: string): void;
   authorizeManagedTaskUpdate(agentId: string, taskId: string, assigneeAgentId?: string): void;
   saveManagedCheckpoint(agentId: string, summary: string): void;
 }
