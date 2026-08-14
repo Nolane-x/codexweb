@@ -12,6 +12,13 @@ export interface CouncilAgent {
   updatedAt: string;
 }
 
+/** Private capability material. Never expose this array through the public dashboard or MCP status. */
+export interface CouncilAgentCredential {
+  agentId: string;
+  token: string;
+  issuedAt: string;
+}
+
 export interface CouncilRoom {
   id: string;
   name: string;
@@ -81,6 +88,8 @@ export interface CouncilCheckpoint {
 export interface CouncilState {
   version: 1;
   agents: CouncilAgent[];
+  /** Private per-agent bearer capabilities. State file permissions are 0600. */
+  credentials: CouncilAgentCredential[];
   rooms: CouncilRoom[];
   messages: CouncilMessage[];
   decisions: CouncilDecision[];

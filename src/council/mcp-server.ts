@@ -6,15 +6,14 @@ import { registerCouncilDiscussionTools } from "./mcp-tools-discussion";
 import { registerCouncilWorkTools } from "./mcp-tools-work";
 
 export const COUNCIL_MCP_SERVER_NAME = "codexweb-council";
-export const COUNCIL_MCP_SERVER_VERSION = "1.0.0";
+export const COUNCIL_MCP_SERVER_VERSION = "1.1.0";
 export const COUNCIL_TOOL_NAMES = ["council_join", "council_room_upsert", "council_status", "council_read", "council_say", "council_propose", "council_reply", "council_decide", "council_task_create", "council_task_update", "council_wake", "council_checkpoint", "council_context", "council_agent_status"] as const;
 
 export function createCouncilMcpServer(store: CouncilStore, options: { wakeDelivery?: CouncilWakeDelivery } = {}): McpServer {
   const server = new McpServer({ name: COUNCIL_MCP_SERVER_NAME, version: COUNCIL_MCP_SERVER_VERSION });
-  const resolveActor = (_extra: unknown, explicit?: string): string => {
-    if (!explicit) throw new Error("Every Council call requires agent_id; call council_join first and keep using your own stable id");
-    if (!store.snapshot().agents.some(agent => agent.id === explicit)) throw new Error(`Council agent is not registered: ${explicit}; call council_join first`);
-    return explicit;
+  const resolveActor = (_extra: unknown, explicit?: string, token?: string): string => {
+    if (!explicit || !token) throw new Error("Every Council call requires agent_id and agent_token; call council_join first and keep the private capability it returns");
+    return store.authenticateAgent(explicit, token).id;
   };
   registerCouncilDiscussionTools(server, store, resolveActor);
   registerCouncilWorkTools(server, store, resolveActor, options.wakeDelivery);
