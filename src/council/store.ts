@@ -1,11 +1,19 @@
 import { randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
-import type { CouncilAgent, CouncilAgentStatus, CouncilCheckpoint, CouncilContextPacket, CouncilDecision, CouncilMessage, CouncilMessageKind, CouncilRoom, CouncilState, CouncilTask, CouncilTaskStatus, CouncilWakeEvent, CouncilWakeStatus } from "./types";
+import type { CouncilAgent, CouncilAgentPresence, CouncilAgentStatus, CouncilCheckpoint, CouncilContextPacket, CouncilDecision, CouncilMessage, CouncilMessageKind, CouncilRoom, CouncilState, CouncilTask, CouncilTaskStatus, CouncilWakeEvent, CouncilWakeStatus } from "./types";
 import { loadCouncilState, persistCouncilState } from "./state-file";
 import { assertCouncilId, councilNow, councilText, DEFAULT_RECENT_MESSAGES, MAX_COUNCIL_MESSAGES } from "./validation";
 import { addCouncilDecision, addCouncilTask, addCouncilWake, updateCouncilTask, updateCouncilWake } from "./work-operations";
 
 export const MAX_ACTIVE_WAKES_PER_TARGET = 2;
+export const COUNCIL_PRESENCE_LEASE_MS = 60_000;
+const COUNCIL_PRESENCE_RENEWAL_WINDOW_MS = Math.floor(COUNCIL_PRESENCE_LEASE_MS / 3);
 const WAKE_SOURCE_TARGET_COOLDOWN_MS = 10_000;
+
+interface CouncilPresenceLease {
+  lastSeenAt: string;
+  leaseExpiresAt: string;
+  publishedLeaseExpiresAt: string;
+}
 
 export function isActiveCouncilWake(wake: Pick<CouncilWakeEvent, "status">): boolean {
   return wake.status === "pending" || wake.status === "delivering";
@@ -26,6 +34,12 @@ function tokenEqual(left: string, right: string): boolean {
   const b = Buffer.from(right, "utf8");
   return a.length === b.length && timingSafeEqual(a, b);
 }
+function presenceTime(value: string | Date | undefined): { iso: string; milliseconds: number } {
+  const date = value === undefined ? new Date() : value instanceof Date ? value : new Date(value);
+  const milliseconds = date.valueOf();
+  if (!Number.isFinite(milliseconds)) throw new Error("Council presence timestamp is invalid");
+  return { iso: date.toISOString(), milliseconds };
+}
 
 export interface CouncilJoinResult {
   agent: CouncilAgent;
@@ -44,6 +58,7 @@ export class CouncilStore {
   private transactionDirty = false;
   private revision = 0;
   private mutationListeners = new Set<(revision: number) => void>();
+  private presenceLeases = new Map<string, CouncilPresenceLease>();
 
   constructor(private readonly path: string) { this.state = loadCouncilState(path); }
 
@@ -70,6 +85,38 @@ export class CouncilStore {
   onMutation(listener: (revision: number) => void): () => void {
     this.mutationListeners.add(listener);
     return () => { this.mutationListeners.delete(listener); };
+  }
+
+  touchAgentPresence(agentId: string, at?: string | Date): CouncilAgentPresence {
+    const agent = this.requireAgent(agentId);
+    const now = presenceTime(at);
+    const leaseExpiresAt = new Date(now.milliseconds + COUNCIL_PRESENCE_LEASE_MS).toISOString();
+    const existing = this.presenceLeases.get(agent.id);
+    const publishedExpiry = existing ? Date.parse(existing.publishedLeaseExpiresAt) : Number.NEGATIVE_INFINITY;
+    const shouldPublish = !existing
+      || now.milliseconds >= publishedExpiry
+      || publishedExpiry - now.milliseconds <= COUNCIL_PRESENCE_RENEWAL_WINDOW_MS;
+    this.presenceLeases.set(agent.id, {
+      lastSeenAt: now.iso,
+      leaseExpiresAt,
+      publishedLeaseExpiresAt: shouldPublish ? leaseExpiresAt : existing!.publishedLeaseExpiresAt,
+    });
+    if (shouldPublish) this.publishMutation();
+    return { agentId: agent.id, lastSeenAt: now.iso, leaseExpiresAt, freshness: "fresh" };
+  }
+
+  presenceSnapshot(at?: string | Date): CouncilAgentPresence[] {
+    const now = presenceTime(at);
+    return this.state.agents.map(agent => {
+      const lease = this.presenceLeases.get(agent.id);
+      if (!lease) return { agentId: agent.id, freshness: "unknown" as const };
+      return {
+        agentId: agent.id,
+        lastSeenAt: lease.lastSeenAt,
+        leaseExpiresAt: lease.leaseExpiresAt,
+        freshness: now.milliseconds <= Date.parse(lease.leaseExpiresAt) ? "fresh" as const : "stale" as const,
+      };
+    });
   }
 
   /**
@@ -121,6 +168,7 @@ export class CouncilStore {
       existing.status = input.status ?? "awake";
       existing.updatedAt = stamp;
       this.persist();
+      this.touchAgentPresence(existing.id, stamp);
       return { agent: structuredClone(existing), agentToken: credential.token, credentialIssued: false };
     }
 
@@ -129,6 +177,7 @@ export class CouncilStore {
     this.state.agents.push(agent);
     this.state.credentials.push({ agentId: id, token, issuedAt: stamp });
     this.persist();
+    this.touchAgentPresence(agent.id, stamp);
     return { agent: structuredClone(agent), agentToken: token, credentialIssued: true };
   }
 
@@ -137,6 +186,7 @@ export class CouncilStore {
     const credential = this.state.credentials.find(item => item.agentId === agent.id);
     if (!credential) throw new Error(`Council agent ${agent.id} is locked because it predates capability authentication; reset experimental Council state or use a new agent_id`);
     if (!presentedToken || !tokenEqual(presentedToken, credential.token)) throw new Error(`Invalid agent_token for Council agent ${agent.id}`);
+    this.touchAgentPresence(agent.id);
     return structuredClone(agent);
   }
 
@@ -147,7 +197,7 @@ export class CouncilStore {
     return credential.token;
   }
 
-  setAgentStatus(agentId: string, status: CouncilAgentStatus): CouncilAgent { const agent = this.requireAgent(agentId); agent.status = status; agent.updatedAt = councilNow(); this.persist(); return structuredClone(agent); }
+  setAgentStatus(agentId: string, status: CouncilAgentStatus): CouncilAgent { const agent = this.requireAgent(agentId); const stamp = councilNow(); agent.status = status; agent.updatedAt = stamp; this.persist(); this.touchAgentPresence(agent.id, stamp); return structuredClone(agent); }
   ensureRoom(input: { id: string; name: string; mission: string }): CouncilRoom {
     const id = assertCouncilId(input.id, "room id"); const stamp = councilNow(); const existing = this.state.rooms.find(room => room.id === id);
     if (existing) { existing.name = councilText(input.name, "room name", 160); existing.mission = councilText(input.mission, "room mission", 8_000); existing.updatedAt = stamp; this.persist(); return structuredClone(existing); }
