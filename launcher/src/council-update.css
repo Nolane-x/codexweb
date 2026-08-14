@@ -1,0 +1,54 @@
+.council-update-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 10020;
+  display: grid;
+  place-items: end center;
+  padding: 28px;
+  pointer-events: none;
+}
+
+.council-update-card {
+  width: min(760px, calc(100vw - 40px));
+  display: grid;
+  grid-template-columns: 48px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 16px;
+  padding: 18px;
+  border: 1px solid rgba(255, 255, 255, 0.11);
+  border-radius: 18px;
+  background: rgba(24, 24, 24, 0.96);
+  box-shadow: 0 20px 70px rgba(0, 0, 0, 0.46);
+  backdrop-filter: blur(24px);
+  pointer-events: auto;
+}
+
+.council-update-mark {
+  width: 44px;
+  height: 44px;
+  display: grid;
+  place-items: center;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-primary, #f3f3f3);
+  font-size: 24px;
+}
+
+.council-update-copy { min-width: 0; }
+.council-update-kicker { color: var(--text-tertiary, #8f8f8f); font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; }
+.council-update-copy h2 { margin: 3px 0 4px; font-size: 15px; font-weight: 650; color: var(--text-primary, #f3f3f3); }
+.council-update-copy p { margin: 0; color: var(--text-secondary, #b8b8b8); font-size: 12px; line-height: 1.45; }
+.council-update-error { margin-top: 7px; color: #ff9b9b; font-size: 12px; }
+.council-update-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
+.council-update-actions button { height: 34px; border-radius: 10px; padding: 0 13px; font: inherit; font-size: 12px; cursor: pointer; }
+.council-update-secondary { border: 1px solid rgba(255, 255, 255, 0.1); background: rgba(255, 255, 255, 0.04); color: var(--text-secondary, #b8b8b8); }
+.council-update-primary { border: 1px solid rgba(255, 255, 255, 0.17); background: #f1f1f1; color: #151515; font-weight: 650; }
+.council-update-actions button:disabled { opacity: 0.5; cursor: default; }
+.council-update-progress { color: var(--text-secondary, #b8b8b8); font-size: 12px; max-width: 220px; text-align: right; }
+
+@media (max-width: 760px) {
+  .council-update-backdrop { padding: 16px; }
+  .council-update-card { grid-template-columns: 40px 1fr; align-items: start; }
+  .council-update-actions { grid-column: 1 / -1; justify-content: stretch; }
+  .council-update-actions button { flex: 1; }
+}
