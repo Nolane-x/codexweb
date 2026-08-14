@@ -7,6 +7,18 @@ function createCouncilBrowserHostClass(LegacyBrowserHost) {
       this.agentSurfaceRegistry = new AgentSurfaceRegistry({ maxSurfaces: 5 });
     }
 
+    snapshot() {
+      const value = super.snapshot();
+      return {
+        ...value,
+        tabs: (value.tabs || []).map(tab => {
+          const binding = this.agentSurfaceRegistry.findByTab(tab.id);
+          const agentId = binding?.bindingKey?.startsWith("agent:") ? binding.bindingKey.slice("agent:".length) : null;
+          return agentId ? { ...tab, agentId } : tab;
+        }),
+      };
+    }
+
     beginTurn(traceId, reveal, helperPid, bindingKey) {
       if (!bindingKey) return super.beginTurn(traceId, reveal, helperPid);
       const bound = this.agentSurfaceRegistry.find(bindingKey);
