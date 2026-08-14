@@ -88,11 +88,12 @@ export function CouncilDock() {
 
   const selectedRoom = snapshot?.rooms.find(room => room.id === selectedRoomId) ?? null;
   const agentsById = useMemo(() => new Map((snapshot?.agents ?? []).map(agent => [agent.id, agent])), [snapshot]);
+  const presenceByAgent = useMemo(() => new Map((snapshot?.presence ?? []).map(presence => [presence.agentId, presence])), [snapshot]);
   const messages = useMemo(() => (snapshot?.messages ?? [])
     .filter(message => message.roomId === selectedRoomId)
     .filter(message => messageFilter === "all" || message.kind === "proposal"), [snapshot, selectedRoomId, messageFilter]);
   const activeTasks = useMemo(() => (snapshot?.tasks ?? []).filter(task => task.roomId === selectedRoomId && task.status !== "done").slice(-12).reverse(), [snapshot, selectedRoomId]);
-  const activeWakes = useMemo(() => (snapshot?.wakes ?? []).filter(wake => wake.roomId === selectedRoomId && (wake.status === "pending" || wake.status === "delivering" || wake.status === "failed")).slice(-10).reverse(), [snapshot, selectedRoomId]);
+  const wakeActivity = useMemo(() => (snapshot?.wakes ?? []).filter(wake => wake.roomId === selectedRoomId).slice(-10).reverse(), [snapshot, selectedRoomId]);
   const decisions = useMemo(() => (snapshot?.decisions ?? []).filter(decision => decision.roomId === selectedRoomId).slice(-8).reverse(), [snapshot, selectedRoomId]);
 
   useEffect(() => {
@@ -194,8 +195,24 @@ export function CouncilDock() {
 
             <aside className="council-intel-pane">
               <div className="council-intel-scroll">
-                <section className="council-intel-section"><div className="council-pane-heading"><span>Participants</span><small>{participantCount}</small></div><div className="council-agent-list">{(snapshot?.agents ?? []).map(agent => <div className="council-agent" key={agent.id}><div className="council-mini-avatar">{initials(agent.name)}<i className={agent.status} /></div><div><strong>{agent.name}</strong><span>{agent.role}</span></div><small>{agent.status}</small></div>)}</div></section>
-                <section className="council-intel-section"><div className="council-pane-heading"><span>Wake activity</span><small>{activeWakes.length}</small></div>{activeWakes.length === 0 ? <p className="council-muted">No active wakes in this snapshot.</p> : activeWakes.map(wake => <div className={`council-intel-card wake ${wake.status}`} key={wake.id}><div><strong>Wake {agentsById.get(wake.targetAgentId)?.name ?? wake.targetAgentId}</strong><span className="council-status-tag">{wake.status}</span></div><p>{wake.reason}</p>{wake.lastError && <small>{wake.lastError}</small>}</div>)}</section>
+                <section className="council-intel-section">
+                  <div className="council-pane-heading"><span>Participants</span><small>{participantCount}</small></div>
+                  <div className="council-agent-list">
+                    {(snapshot?.agents ?? []).map(agent => {
+                      const presence = presenceByAgent.get(agent.id);
+                      const presenceFreshness = presence?.freshness ?? "unknown";
+                      const leaseExpiresAt = presence && presence.freshness !== "unknown" ? presence.leaseExpiresAt : undefined;
+                      return (
+                        <div className="council-agent" key={agent.id}>
+                          <div className="council-mini-avatar">{initials(agent.name)}<i className={agent.status} /></div>
+                          <div><strong>{agent.name}</strong><span>{agent.role}</span></div>
+                          <small>{agent.status} · {presenceFreshness}{leaseExpiresAt ? ` · lease ${timeLabel(leaseExpiresAt)}` : ""}</small>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </section>
+                <section className="council-intel-section"><div className="council-pane-heading"><span>Wake activity</span><small>{wakeActivity.length}</small></div>{wakeActivity.length === 0 ? <p className="council-muted">No wakes in this snapshot.</p> : wakeActivity.map(wake => <div className={`council-intel-card wake ${wake.status}`} key={wake.id}><div><strong>Wake {agentsById.get(wake.targetAgentId)?.name ?? wake.targetAgentId}</strong><span className="council-status-tag">{wake.status}</span></div><p>{wake.reason}</p>{wake.expiresAt && <small>expires {timeLabel(wake.expiresAt)}</small>}{wake.lastError && <small>{wake.lastError}</small>}</div>)}</section>
                 <section className="council-intel-section"><div className="council-pane-heading"><span>Active work</span><small>{activeTasks.length}</small></div>{activeTasks.length === 0 ? <p className="council-muted">No active tasks.</p> : activeTasks.map(task => <div className={`council-intel-card task ${task.status}`} key={task.id}><div><strong>{task.title}</strong><span className="council-status-tag">{shortStatus(task.status)}</span></div><p>{task.description}</p>{task.assigneeAgentId && <small>→ {agentsById.get(task.assigneeAgentId)?.name ?? task.assigneeAgentId}</small>}</div>)}</section>
                 <section className="council-intel-section"><div className="council-pane-heading"><span>Decisions</span><small>{decisions.length}</small></div>{decisions.length === 0 ? <p className="council-muted">No final policy yet.</p> : decisions.map(decision => <div className="council-intel-card decision" key={decision.id}><strong>{decision.title}</strong><p>{decision.policy}</p>{decision.unresolvedRisks.length > 0 && <small>{decision.unresolvedRisks.length} unresolved risk{decision.unresolvedRisks.length === 1 ? "" : "s"}</small>}</div>)}</section>
               </div>
