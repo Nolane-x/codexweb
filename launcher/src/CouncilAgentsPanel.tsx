@@ -26,6 +26,9 @@ export function CouncilAgentsPanel() {
   const [managed, setManaged] = useState<ManagedSnapshot | null>(null);
   const [browser, setBrowser] = useState<BrowserState | null>(null);
   const [online, setOnline] = useState(false);
+  const [binding, setBinding] = useState(false);
+  const [bindMessage, setBindMessage] = useState("");
+  const [projectName, setProjectName] = useState("ChatGPT Project");
 
   useEffect(() => {
     const api = window.codexWebLauncher;
@@ -69,6 +72,21 @@ export function CouncilAgentsPanel() {
     await api.showBrowser();
   };
 
+  const bindLead = async () => {
+    const api = window.codexWebLauncher;
+    if (!api || binding) return;
+    setBinding(true);
+    setBindMessage("Binding the current persistent ChatGPT conversation…");
+    try {
+      const result = await api.bindCurrentChatGptAsLead({ projectName: projectName.trim() || "ChatGPT Project" });
+      setBindMessage(`Lead ${result.lead.name} is bound. The Council bootstrap turn has been sent.`);
+    } catch (error) {
+      setBindMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setBinding(false);
+    }
+  };
+
   return (
     <>
       <button className={`council-agents-launch${open ? " is-open" : ""}`} onClick={() => setOpen(value => !value)} type="button" title="Managed ChatGPT agents">
@@ -86,7 +104,19 @@ export function CouncilAgentsPanel() {
               <p>{managed.project.mission}</p>
               <small>Lead · {managed.project.leadAgentId}</small>
             </div>
-          ) : <div className="council-agents-empty">The first connected ChatGPT can call <code>council_start_project</code> to become Lead and create its team.</div>}
+          ) : (
+            <div className="council-agents-empty">
+              <strong>Start with your current ChatGPT conversation</strong>
+              <p>Open the persistent Project chat you want to lead this Council. Electron reads that exact conversation URL itself; it is never accepted from page content.</p>
+              <input value={projectName} onChange={event => setProjectName(event.target.value)} maxLength={160} placeholder="Project name" />
+              <button type="button" disabled={binding || browser?.authenticated !== true || !online} onClick={() => void bindLead()}>
+                {binding ? "Binding…" : "Bind current ChatGPT as Lead"}
+              </button>
+              {!online ? <small>Connect the Council Tunnel first so the local Council runtime is online.</small> : null}
+              {browser?.authenticated !== true ? <small>Sign in to ChatGPT in Electron first.</small> : null}
+              {bindMessage ? <small>{bindMessage}</small> : null}
+            </div>
+          )}
           <div className="council-agents-list">
             {(managed?.agents ?? []).map(agent => {
               const tab = tabByAgent.get(agent.id);
