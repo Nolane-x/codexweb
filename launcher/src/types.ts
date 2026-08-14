@@ -59,6 +59,110 @@ export interface LogRecord {
   detail: Record<string, unknown>;
 }
 
+export type SafeReasonCode =
+  | "AUTH_REQUIRED"
+  | "AUTH_REJECTED"
+  | "CONTROL_PLANE_UNREACHABLE"
+  | "CONTROL_PLANE_TIMEOUT"
+  | "SNAPSHOT_FAILED"
+  | "SNAPSHOT_SCHEMA_MISMATCH"
+  | "STREAM_INTERRUPTED"
+  | "RESYNC_REQUIRED"
+  | "PROJECT_UNATTACHED"
+  | "PROJECT_FORBIDDEN"
+  | "CAPABILITY_UNAVAILABLE"
+  | "WAKE_QUEUE_SATURATED"
+  | "STALE_BASE"
+  | "UNKNOWN";
+
+export interface SafeReason {
+  code: SafeReasonCode;
+  messageKey?: string;
+  retryable?: boolean;
+  correlationId?: string;
+  metadata?: Record<string, string | number | boolean>;
+}
+
+export interface CouncilAgentView { id: string; name: string; role: string; status: "awake" | "sleeping" | "offline"; joinedAt?: string; updatedAt: string }
+export interface CouncilRoomView { id: string; name: string; mission: string; createdAt?: string; updatedAt: string }
+export interface CouncilMessageView { id: string; roomId: string; authorAgentId: string; kind: "message" | "proposal" | "decision" | "system"; body: string; threadId: string; replyTo?: string; mentions: string[]; createdAt: string }
+export interface CouncilDecisionView { id: string; roomId: string; createdByAgentId: string; title: string; policy: string; rationale: string; unresolvedRisks: string[]; createdAt: string }
+export interface CouncilTaskView { id: string; roomId: string; assigneeAgentId?: string; title: string; description: string; status: "todo" | "claimed" | "in_progress" | "review" | "done" | "blocked"; updatedAt: string }
+export interface CouncilWakeView { id: string; targetAgentId: string; sourceAgentId?: string; roomId: string; reason: string; status: string; attempts: number; lastError?: string; updatedAt: string }
+
+export interface RepoWorkspaceBindingView {
+  schemaVersion: 1;
+  provider: "github";
+  repoId: string;
+  owner: string;
+  name: string;
+  defaultBranch: string;
+  baseCommit: string;
+}
+
+export interface ManagedProjectView {
+  roomId: string;
+  name: string;
+  mission: string;
+  leadAgentId: string;
+  workspace?: RepoWorkspaceBindingView;
+}
+export interface ManagedAgentView {
+  id: string;
+  name: string;
+  role: string;
+  mandate: string;
+  permissions: string[];
+  conversationBound: boolean;
+  checkpointSaved: boolean;
+  runtimeStatus: "active" | "sleeping" | "queued" | "failed";
+}
+export interface ManagedCouncilView { project: ManagedProjectView | null; agents: ManagedAgentView[] }
+
+export interface CouncilSharedStateView {
+  version: 1;
+  generatedAt: string;
+  agents: CouncilAgentView[];
+  rooms: CouncilRoomView[];
+  messages: CouncilMessageView[];
+  decisions: CouncilDecisionView[];
+  tasks: CouncilTaskView[];
+  wakes: CouncilWakeView[];
+  managed: ManagedCouncilView | null;
+}
+
+export interface ControlPlaneState {
+  state: "connecting" | "connected" | "degraded" | "offline";
+  reason?: SafeReason;
+}
+
+export type SharedProjectionState =
+  | { syncState: "idle" }
+  | { syncState: "hydrating" }
+  | { syncState: "live"; state: CouncilSharedStateView; cursor: string; lastSyncedAt: string }
+  | { syncState: "stale"; state: CouncilSharedStateView; cursor: string; lastSyncedAt: string; reason: SafeReason }
+  | { syncState: "error"; reason: SafeReason };
+
+export interface ManagedProjectState {
+  state: "attached" | "unattached" | "forbidden" | "error";
+  projectId?: string;
+  reason?: SafeReason;
+}
+
+export type CapabilityName = "secureTunnel" | "localRepo" | "githubConnector" | "fullMcp" | "wakeEngine";
+export interface CapabilityState {
+  available: boolean;
+  state?: "idle" | "starting" | "ready" | "degraded" | "error";
+  reason?: SafeReason;
+}
+
+export interface CouncilRuntimeViewState {
+  controlPlane: ControlPlaneState;
+  projection: SharedProjectionState;
+  managedProject: ManagedProjectState;
+  capabilities: Record<CapabilityName, CapabilityState>;
+}
+
 export interface DoctorCheck { id: string; status: "ok" | "warning" | "error"; message: string; detail?: string }
 export interface DoctorReport { ok: boolean; mode?: "browser-only" | "full"; checks: DoctorCheck[] }
 export interface OperationState { name: string; status: "running" | "completed" | "failed"; message: string }
@@ -70,6 +174,7 @@ export type UpdateState =
 export interface LauncherSnapshot {
   state: LauncherState;
   browser: BrowserState | null;
+  councilRuntime: CouncilRuntimeViewState;
   connectorName: string;
   mcpCredentialsConfigured: boolean;
   logs: LogRecord[];
@@ -84,6 +189,7 @@ export interface LauncherSnapshot {
 
 export interface LauncherApi {
   snapshot(): Promise<LauncherSnapshot>;
+  councilRuntime(): Promise<CouncilRuntimeViewState>;
   setLanguage(language: Language): Promise<LauncherState>;
   openSocial(target: "github" | "x"): Promise<LauncherState>;
   completeOnboarding(language: Language): Promise<LauncherState>;
@@ -124,6 +230,7 @@ export interface LauncherApi {
   onWindowStateChanged(listener: (state: { fullScreen: boolean; maximized: boolean }) => void): () => void;
   onStateChanged(listener: (state: LauncherState) => void): () => void;
   onBrowserState(listener: (state: BrowserState) => void): () => void;
+  onCouncilRuntime(listener: (state: CouncilRuntimeViewState) => void): () => void;
   onOperation(listener: (state: OperationState) => void): () => void;
   onLog(listener: (record: LogRecord) => void): () => void;
   onUpdateState(listener: (state: UpdateState) => void): () => void;
