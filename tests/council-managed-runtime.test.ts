@@ -12,6 +12,8 @@ const workspace = {
   schemaVersion: 1 as const,
   provider: "github" as const,
   repoId: "Nolane-x/codexweb",
+  owner: "Nolane-x",
+  name: "codexweb",
   defaultBranch: "main",
   baseCommit: "48a596a4fb0caa177ea2967e5c96bbb0c0aec7c3",
 };
