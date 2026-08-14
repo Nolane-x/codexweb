@@ -26,6 +26,7 @@ export const COUNCIL_TOOL_NAMES = [
   "council_agent_status",
   "council_start_project",
   "council_spawn_agent",
+  "council_bind_repo_workspace",
   "council_managed_status",
 ] as const;
 
