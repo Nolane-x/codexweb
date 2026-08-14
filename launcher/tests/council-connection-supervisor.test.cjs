@@ -123,3 +123,66 @@ test("failed first hydrate is sync error/unknown, never authoritative empty", as
   assert.equal(Object.hasOwn(runtime.projection, "state"), false);
   assert.equal(runtime.projection.reason.code, "SNAPSHOT_FAILED");
 });
+
+test("safe diagnostics correlate hydrate, stale and recovery timing without leaking raw failures", async () => {
+  let fail = false;
+  let nowMs = 1_000;
+  const events = [];
+  const logger = {
+    info(event, fields) { events.push({ level: "info", event, fields }); },
+    warn(event, fields) { events.push({ level: "warn", event, fields }); },
+  };
+  const supervisor = new CouncilConnectionSupervisor({
+    correlationId: "council-test-correlation",
+    now: () => nowMs,
+    logger,
+    client: { getSnapshot: async () => {
+      nowMs += 25;
+      if (fail) throw new Error("Bearer ghp_super_secret_should_never_be_logged");
+      return { schemaVersion: 1, state: canonicalState, cursor: "C1", generatedAt: canonicalState.generatedAt };
+    } },
+    capabilities: () => unavailableCapabilities,
+  });
+
+  await supervisor.hydrateOnce();
+  fail = true;
+  nowMs = 2_000;
+  await supervisor.hydrateOnce();
+  fail = false;
+  nowMs = 5_000;
+  await supervisor.hydrateOnce();
+
+  const hydrated = events.find(item => item.event === "council.shared_hydrated");
+  assert.equal(hydrated?.fields?.correlationId, "council-test-correlation");
+  assert.equal(hydrated?.fields?.latencyMs, 25);
+  const stale = events.find(item => item.event === "council.shared_projection_stale");
+  assert.equal(stale?.fields?.correlationId, "council-test-correlation");
+  const recovered = events.find(item => item.event === "council.shared_projection_recovered");
+  assert.equal(recovered?.fields?.correlationId, "council-test-correlation");
+  assert.equal(recovered?.fields?.staleDurationMs, 3_000);
+  assert.doesNotMatch(JSON.stringify(events), /ghp_super_secret|Bearer/);
+});
+
+test("typed resync diagnostics reuse the supervisor correlation id and never expose the opaque cursor", async () => {
+  const events = [];
+  const abortController = new AbortController();
+  let hydrateCount = 0;
+  const supervisor = new CouncilConnectionSupervisor({
+    correlationId: "council-resync-correlation",
+    logger: { info(event, fields) { events.push({ event, fields }); } },
+    capabilities: () => unavailableCapabilities,
+    client: {
+      async getSnapshot() {
+        hydrateCount += 1;
+        if (hydrateCount === 2) abortController.abort();
+        return { schemaVersion: 1, state: canonicalState, cursor: hydrateCount === 1 ? "opaque-secret-cursor-1" : "opaque-secret-cursor-2", generatedAt: canonicalState.generatedAt };
+      },
+      async next() { return { type: "resync-required" }; },
+    },
+  });
+
+  await supervisor.run(abortController.signal);
+  const resync = events.find(item => item.event === "council.shared_resync_required");
+  assert.equal(resync?.fields?.correlationId, "council-resync-correlation");
+  assert.doesNotMatch(JSON.stringify(events), /opaque-secret-cursor/);
+});
