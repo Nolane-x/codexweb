@@ -66,6 +66,19 @@ function createCouncilBrowserHostClass(LegacyBrowserHost) {
       this.logger?.info?.("browser.agent_tab_parked", { tabId: tab.id, traceId, bindingKey: tab.bindingKey, status: tab.status });
     }
 
+    releaseAgentSurface(bindingKey) {
+      const bound = this.agentSurfaceRegistry.find(bindingKey);
+      if (!bound) return false;
+      const tab = this.turnTabs.get(bound.tabId);
+      if (tab?.status === "running") throw new Error(`Council agent surface ${bindingKey} still has an active turn`);
+      if (tab) this.removeTurnTab(tab, false);
+      else this.agentSurfaceRegistry.release(bindingKey);
+      this.publishState?.(this.snapshot());
+      this.writeDescriptor?.();
+      this.logger?.info?.("browser.agent_tab_released", { bindingKey });
+      return true;
+    }
+
     removeTurnTab(tab, abortRunning) {
       if (tab?.bindingKey) this.agentSurfaceRegistry.release(tab.bindingKey);
       return super.removeTurnTab(tab, abortRunning);
