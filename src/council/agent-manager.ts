@@ -120,7 +120,7 @@ export class CouncilAgentManager {
     this.assertDepth(depth);
     const target = this.requireManaged(wake.targetAgentId);
     return this.enqueue(target.id, async () => {
-      this.council.updateWake(wake.id, "delivering");
+      this.council.updateWake(wake.id, "dispatched");
       const packet = this.council.buildContextPacket({ agentId: target.id, roomId: wake.roomId, wakeId: wake.id, recentLimit: 12 });
       const full = buildAgentResurrectionPrompt(target, {
         roomId: wake.roomId,
@@ -145,8 +145,15 @@ export class CouncilAgentManager {
         'Respond according to your role and end with one valid <COUNCIL_ACTIONS version="1"> block.',
       ].join("\n");
       try {
-        await this.runManagedAgent(target.id, delta, wake.roomId, depth + 1, full);
-        this.council.updateWake(wake.id, "acknowledged");
+        await this.runManagedAgent(
+          target.id,
+          delta,
+          wake.roomId,
+          depth + 1,
+          full,
+          () => { this.council.updateWake(wake.id, "target-running"); },
+        );
+        this.council.updateWake(wake.id, "replied");
       } catch (error) {
         this.council.updateWake(wake.id, "failed", "Managed wake failed; inspect local runtime logs");
         throw error;
@@ -154,11 +161,19 @@ export class CouncilAgentManager {
     });
   }
 
-  private async runManagedAgent(agentId: string, prompt: string, roomId: string, depth: number, resurrectionPrompt?: string): Promise<void> {
+  private async runManagedAgent(
+    agentId: string,
+    prompt: string,
+    roomId: string,
+    depth: number,
+    resurrectionPrompt?: string,
+    onRunning?: () => void,
+  ): Promise<void> {
     this.assertDepth(depth);
     const agent = this.requireManaged(agentId);
     const lease = this.registry.lease(agentId);
     if (lease.status === "queued") throw new Error(`Council agent ${agentId} is queued because all browser surfaces are busy`);
+    onRunning?.();
     let effects: DeferredEffect[] = [];
     try {
       let result = await this.transport.run({
