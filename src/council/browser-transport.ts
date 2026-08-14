@@ -8,6 +8,7 @@ export interface CouncilPersistentTurnControl {
   start(input: { traceId: string; bindingKey: string }): Promise<{ surfaceId: string }>;
   heartbeat(input: { traceId: string }): Promise<void>;
   end(input: { traceId: string; status: "completed" | "failed" | "aborted"; message?: string }): Promise<void>;
+  release?(input: { bindingKey: string }): Promise<boolean>;
 }
 
 export interface CouncilPersistentChatDriver {
@@ -74,5 +75,11 @@ export class CouncilBrowserTransport {
     } finally {
       if (timer) clearInterval(timer);
     }
+  }
+
+  async release(agentId: string): Promise<boolean> {
+    const id = agentId.trim();
+    if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(id)) throw new Error("agentId is invalid");
+    return this.control.release ? await this.control.release({ bindingKey: `agent:${id}` }) : false;
   }
 }
