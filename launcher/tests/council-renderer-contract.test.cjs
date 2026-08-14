@@ -9,6 +9,8 @@ const dock = readFileSync(join(root, "src", "CouncilDock.tsx"), "utf8");
 const setup = readFileSync(join(root, "src", "CouncilSetupPanel.tsx"), "utf8");
 const agents = readFileSync(join(root, "src", "CouncilAgentsPanel.tsx"), "utf8");
 const updates = readFileSync(join(root, "src", "CouncilUpdatePrompt.tsx"), "utf8");
+const types = readFileSync(join(root, "src", "types.ts"), "utf8");
+const preload = readFileSync(join(root, "electron", "preload.cjs"), "utf8");
 const css = readFileSync(join(root, "src", "council.css"), "utf8");
 const indexHtml = readFileSync(join(root, "index.html"), "utf8");
 
@@ -22,12 +24,16 @@ test("Council UI is additive and preserves the existing App", () => {
   assert.match(main, /import "\.\/styles\.css"/);
 });
 
-test("Council renderer talks only to loopback state and setup uses launcher MCP API", () => {
-  assert.match(dock, /http:\/\/127\.0\.0\.1:17842\/api\/state/);
-  assert.match(agents, /http:\/\/127\.0\.0\.1:17842\/api\/state/);
-  assert.doesNotMatch(dock, /https:\/\//);
-  assert.doesNotMatch(agents, /https:\/\//);
-  assert.match(indexHtml, /connect-src[^;]*http:\/\/127\.0\.0\.1:\*/);
+test("Council renderer consumes supervisor-owned shared projection over IPC", () => {
+  assert.doesNotMatch(dock, /127\.0\.0\.1:17842/);
+  assert.doesNotMatch(dock, /fetch\(COUNCIL_ENDPOINT/);
+  assert.match(dock, /api\.councilSnapshot\(\)/);
+  assert.match(dock, /api\.onCouncilState/);
+  assert.match(preload, /council:snapshot/);
+  assert.match(preload, /council:state/);
+  assert.match(types, /CouncilRuntimeViewState/);
+  assert.match(types, /syncState: "idle" \| "hydrating" \| "live" \| "stale" \| "error"/);
+  assert.match(indexHtml, /connect-src/);
   assert.match(setup, /api\.setupMcp/);
   assert.match(setup, /CodexWeb Council/);
 });
