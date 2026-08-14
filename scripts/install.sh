@@ -2,16 +2,15 @@
 set -eu
 
 REPOSITORY="${CODEX_CHATGPT_WEB_REPOSITORY:-Nolane-x/codexweb}"
-VERSION="${CODEX_CHATGPT_WEB_VERSION:-3.0.0}"
+VERSION="${CODEX_CHATGPT_WEB_VERSION:-3.1.0}"
 BIN_DIR="${CODEX_CHATGPT_WEB_BIN_DIR:-$HOME/.local/bin}"
 LIB_DIR="${CODEX_CHATGPT_WEB_LIB_DIR:-$HOME/.local/lib/codex-chatgpt-web}"
 DOC_DIR="${CODEX_CHATGPT_WEB_DOC_DIR:-$HOME/.local/share/doc/codex-chatgpt-web}"
 
 if [ "$(uname -s)" != "Darwin" ]; then
-  echo "The terminal-only installer supports macOS only; use the desktop launcher on Windows or Linux" >&2
+  echo "The terminal-only runtime installer supports macOS only; use the Electron release on Windows or Linux" >&2
   exit 1
 fi
-
 case "$(uname -m)" in
   arm64) ARCH="arm64" ;;
   x86_64) ARCH="amd64" ;;
@@ -28,55 +27,37 @@ trap 'rm -rf "$TEMP_DIR" "$STAGE_DIR"' EXIT HUP INT TERM
 
 curl -fsSL "$BASE_URL/$ASSET" -o "$TEMP_DIR/$ASSET"
 curl -fsSL "$BASE_URL/checksums.txt" -o "$TEMP_DIR/checksums.txt"
-
 EXPECTED="$(awk -v asset="$ASSET" '$2 == asset { print $1 }' "$TEMP_DIR/checksums.txt")"
 ACTUAL="$(shasum -a 256 "$TEMP_DIR/$ASSET" | awk '{ print $1 }')"
-if [ -z "$EXPECTED" ] || [ "$ACTUAL" != "$EXPECTED" ]; then
-  echo "SHA-256 verification failed for $ASSET" >&2
-  exit 1
-fi
+if [ -z "$EXPECTED" ] || [ "$ACTUAL" != "$EXPECTED" ]; then echo "SHA-256 verification failed for $ASSET" >&2; exit 1; fi
 
 for DOC in LICENSE Bun-1.3.14.md THIRD_PARTY_NOTICES.txt; do
   curl -fsSL "$BASE_URL/$DOC" -o "$TEMP_DIR/$DOC"
   DOC_EXPECTED="$(awk -v asset="$DOC" '$2 == asset { print $1 }' "$TEMP_DIR/checksums.txt")"
   DOC_ACTUAL="$(shasum -a 256 "$TEMP_DIR/$DOC" | awk '{ print $1 }')"
-  if [ -z "$DOC_EXPECTED" ] || [ "$DOC_ACTUAL" != "$DOC_EXPECTED" ]; then
-    echo "SHA-256 verification failed for $DOC" >&2
-    exit 1
-  fi
+  if [ -z "$DOC_EXPECTED" ] || [ "$DOC_ACTUAL" != "$DOC_EXPECTED" ]; then echo "SHA-256 verification failed for $DOC" >&2; exit 1; fi
 done
 
 mkdir -p "$LIB_DIR" "$BIN_DIR" "$DOC_DIR"
 mkdir "$STAGE_DIR"
 tar -xzf "$TEMP_DIR/$ASSET" -C "$STAGE_DIR"
-if [ ! -x "$STAGE_DIR/bin/codex-chatgpt-web" ] || [ ! -x "$STAGE_DIR/runtime/bun" ]; then
-  echo "Runtime archive is incomplete" >&2
-  exit 1
-fi
-if [ "$("$STAGE_DIR/bin/codex-chatgpt-web" --version)" != "$VERSION" ]; then
-  echo "Runtime archive version does not match $VERSION" >&2
-  exit 1
-fi
+if [ ! -x "$STAGE_DIR/bin/codex-chatgpt-web" ] || [ ! -x "$STAGE_DIR/runtime/bun" ]; then echo "Runtime archive is incomplete" >&2; exit 1; fi
+if [ "$("$STAGE_DIR/bin/codex-chatgpt-web" --version)" != "$VERSION" ]; then echo "Runtime archive version does not match $VERSION" >&2; exit 1; fi
 
-if [ -e "$TARGET_DIR" ]; then
-  mv "$TARGET_DIR" "$BACKUP_DIR"
-fi
+if [ -e "$TARGET_DIR" ]; then mv "$TARGET_DIR" "$BACKUP_DIR"; fi
 if ! mv "$STAGE_DIR" "$TARGET_DIR"; then
   if [ -e "$BACKUP_DIR" ]; then mv "$BACKUP_DIR" "$TARGET_DIR"; fi
   exit 1
 fi
-
 ln -sfn "$TARGET_DIR/bin/codex-chatgpt-web" "$BIN_DIR/.codex-chatgpt-web.next"
 mv -f "$BIN_DIR/.codex-chatgpt-web.next" "$BIN_DIR/codex-chatgpt-web"
 rm -f "$BIN_DIR/codex-chatgpt-web.legacy-standalone"
-for DOC in LICENSE Bun-1.3.14.md THIRD_PARTY_NOTICES.txt; do
-  install -m 0644 "$TEMP_DIR/$DOC" "$DOC_DIR/$DOC"
-done
+for DOC in LICENSE Bun-1.3.14.md THIRD_PARTY_NOTICES.txt; do install -m 0644 "$TEMP_DIR/$DOC" "$DOC_DIR/$DOC"; done
 if [ -e "$BACKUP_DIR" ]; then rm -rf "$BACKUP_DIR"; fi
 
-echo "Installed $TARGET_DIR"
+echo "Installed Council runtime $TARGET_DIR"
 if [ "$#" -gt 0 ]; then
-  "$TARGET_DIR/bin/codex-chatgpt-web" setup "$@"
-  exit 0
+  echo "Council 3.1 no longer performs Codex setup from the runtime installer. Configure the Secure MCP Tunnel from the Electron app." >&2
+  exit 2
 fi
-echo "Next: $BIN_DIR/codex-chatgpt-web setup --browser-only --acknowledge-unofficial"
+echo "Next: open the CodexWeb Council Electron app, sign in to ChatGPT, connect the Tunnel, then bind your Project chat as Lead."
