@@ -1,6 +1,16 @@
-# CodexWeb Council 3.1
+# CodexWeb Council 3.3
 
 **A standalone Electron control center where normal ChatGPT conversations can form a persistent AI team, deliberate, wake one another, reach policy, divide work, and continue in their own conversations.**
+
+## What changed in 3.3
+
+Council 3.3 hardens the reliability boundary between durable Council state, persistent ChatGPT conversations, and ephemeral browser surfaces.
+
+- Wake delivery now exposes one canonical lifecycle: `queued → dispatched → target-running → replied`, with `failed` and `expired` terminal states. Legacy persisted `pending`, `delivering`, and `acknowledged` records remain readable but are normalized at the public projection boundary.
+- A blank or closed browser surface before submission is treated as a recoverable surface failure rather than a missing ChatGPT conversation. Council releases and reacquires that agent surface once; arbitrary send/network failures are never retried, preventing duplicate turns.
+- Managed-agent resurrection now carries an explicit unfinished-commitments capsule alongside checkpoint, recent messages, decisions, tasks, and the wake reason.
+- The Council dock shows wake transition evidence and timestamps so wake routing can be diagnosed without exposing private conversation URLs or credentials.
+- Shared Council visibility remains independent from local execution capabilities: losing a local tool or browser capability does not erase the last authoritative synchronized collaboration state.
 
 ## What changed in 3.1
 
@@ -67,7 +77,7 @@ Choose the same Secure MCP Tunnel and the authentication mode supported by the w
 
 ## Deliberation
 
-A managed final decision requires an explicit proposal, independent critique when more than one participant is involved, no blocked task, and no pending/delivering wake or review. The final record stores rationale, accepted/rejected arguments, and unresolved risks.
+A managed final decision requires an explicit proposal, independent critique when more than one participant is involved, no blocked task, and no active `queued`, `dispatched`, or `target-running` wake/review. The final record stores rationale, accepted/rejected arguments, and unresolved risks.
 
 ## Development
 
