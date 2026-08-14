@@ -39,6 +39,7 @@ test("live canonical projection stays visible when every local execution capabil
 
   assert.equal(runtime.controlPlane.state, "connected");
   assert.equal(runtime.projection.syncState, "live");
+  assert.equal(runtime.projection.cursor, "C1");
   assert.equal(runtime.projection.state.rooms.length, 2);
   assert.equal(runtime.projection.state.agents.length, 2);
   assert.equal(runtime.projection.state.messages.length, 1);
