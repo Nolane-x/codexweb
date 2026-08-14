@@ -1,9 +1,10 @@
+export type CouncilBrowserDelegatedPermission = "spawn" | "finalize" | "reopen" | "assign" | "wake" | "review";
 export type CouncilBrowserAction =
   | { type: "SAY"; room_id: string; body: string; mentions?: string[] }
   | { type: "PROPOSE"; room_id: string; body: string; mentions?: string[] }
   | { type: "REPLY"; room_id: string; reply_to: string; body: string; mentions?: string[] }
   | { type: "WAKE"; room_id: string; target_agent_id: string; reason: string; source_message_id?: string }
-  | { type: "SPAWN_AGENT"; name: string; role: string; mandate: string; requested_agent_id?: string }
+  | { type: "SPAWN_AGENT"; name: string; role: string; mandate: string; requested_agent_id?: string; permissions?: CouncilBrowserDelegatedPermission[] }
   | { type: "CREATE_TASK"; room_id: string; title: string; description: string; assignee_agent_id?: string }
   | { type: "UPDATE_TASK"; task_id: string; status: "todo" | "claimed" | "in_progress" | "review" | "done" | "blocked"; assignee_agent_id?: string }
   | { type: "REQUEST_REVIEW"; room_id: string; task_id: string; reviewer_agent_id: string; reason: string }
@@ -17,12 +18,14 @@ export interface ParsedCouncilActionFooter { visibleText: string; batch: Council
 const ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 const MAX_ACTIONS = 16;
 const MAX_JSON_CHARS = 64 * 1024;
+const DELEGATED_PERMISSIONS = new Set<CouncilBrowserDelegatedPermission>(["spawn", "finalize", "reopen", "assign", "wake", "review"]);
+const CONTENT_ACTIONS = new Set<CouncilBrowserAction["type"]>(["SAY", "PROPOSE", "REPLY"]);
 const schemas: Record<CouncilBrowserAction["type"], { required: readonly string[]; optional: readonly string[] }> = {
   SAY: { required: ["type", "room_id", "body"], optional: ["mentions"] },
   PROPOSE: { required: ["type", "room_id", "body"], optional: ["mentions"] },
   REPLY: { required: ["type", "room_id", "reply_to", "body"], optional: ["mentions"] },
   WAKE: { required: ["type", "room_id", "target_agent_id", "reason"], optional: ["source_message_id"] },
-  SPAWN_AGENT: { required: ["type", "name", "role", "mandate"], optional: ["requested_agent_id"] },
+  SPAWN_AGENT: { required: ["type", "name", "role", "mandate"], optional: ["requested_agent_id", "permissions"] },
   CREATE_TASK: { required: ["type", "room_id", "title", "description"], optional: ["assignee_agent_id"] },
   UPDATE_TASK: { required: ["type", "task_id", "status"], optional: ["assignee_agent_id"] },
   REQUEST_REVIEW: { required: ["type", "room_id", "task_id", "reviewer_agent_id", "reason"], optional: [] },
@@ -38,7 +41,9 @@ export function validateCouncilActionBatch(value: unknown): CouncilActionBatch {
   if (batch.version !== undefined && batch.version !== 1) throw new Error("unsupported Council action version");
   if (!Array.isArray(batch.actions)) throw new Error("Council action batch requires actions");
   if (batch.actions.length > MAX_ACTIONS) throw new Error(`Council action batch exceeds ${MAX_ACTIONS} actions`);
-  return { version: 1, actions: batch.actions.map(validateAction) };
+  const actions = batch.actions.map(validateAction);
+  if (actions.filter(action => CONTENT_ACTIONS.has(action.type)).length > 1) throw new Error("Council turn may contain at most one SAY, PROPOSE, or REPLY action");
+  return { version: 1, actions };
 }
 
 function validateAction(value: unknown): CouncilBrowserAction {
@@ -62,6 +67,10 @@ function validateAction(value: unknown): CouncilBrowserAction {
   for (const key of ["mentions", "accepted_arguments", "rejected_arguments", "unresolved_risks"] as const) {
     const candidate = action[key];
     if (candidate !== undefined && (!Array.isArray(candidate) || candidate.some(item => typeof item !== "string" || !item.trim()))) throw new Error(`${key} must be a string array`);
+  }
+  if (action.permissions !== undefined) {
+    if (!Array.isArray(action.permissions) || action.permissions.length > DELEGATED_PERMISSIONS.size || action.permissions.some(item => typeof item !== "string" || !DELEGATED_PERMISSIONS.has(item as CouncilBrowserDelegatedPermission))) throw new Error("permissions must contain only supported Council permissions");
+    if (new Set(action.permissions).size !== action.permissions.length) throw new Error("permissions must not contain duplicates");
   }
   return structuredClone(action) as CouncilBrowserAction;
 }
