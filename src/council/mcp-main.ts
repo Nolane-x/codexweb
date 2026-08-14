@@ -24,12 +24,7 @@ function takeOption(args: string[], name: string): string | undefined {
   args.splice(index, 2);
   return value;
 }
-
-function projectName(value: string): string {
-  const normalized = value.trim();
-  if (!normalized) return "ChatGPT Project";
-  return normalized.slice(0, 160);
-}
+function projectName(value: string): string { const normalized = value.trim(); return normalized ? normalized.slice(0, 160) : "ChatGPT Project"; }
 
 export async function runCouncilMcpMain(args: string[]): Promise<void> {
   const remaining = [...args];
@@ -60,8 +55,7 @@ export async function runCouncilMcpMain(args: string[]): Promise<void> {
     }
     if (config.mode === "full") fallbackWake = new CouncilWakeEngine(store, config);
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    console.info(`[council-runtime] managed browser transport unavailable: ${message}`);
+    console.info(`[council-runtime] managed browser transport unavailable: ${error instanceof Error ? error.message : String(error)}`);
   }
 
   let ownerToken: string | undefined;
@@ -76,7 +70,6 @@ export async function runCouncilMcpMain(args: string[]): Promise<void> {
           const name = projectName(input.projectName);
           let project = managedRuntime.activeProject();
           let leadId = project?.leadAgentId;
-
           if (!project) {
             const participants = [...store.snapshot().agents].sort((left, right) => left.joinedAt.localeCompare(right.joinedAt) || left.id.localeCompare(right.id));
             const actor = participants[0] ?? store.joinAgent({ id: "lead", name: "Lead", role: "Lead Coordinator", status: "awake" }).agent;
@@ -89,7 +82,6 @@ export async function runCouncilMcpMain(args: string[]): Promise<void> {
             project = started.project;
             leadId = started.lead.id;
           }
-
           if (!project || !leadId) throw new Error("Council project lead could not be initialized");
           const bound = managedState.bindConversation(leadId, input.conversationUrl);
           const wake = store.wake({
@@ -109,6 +101,9 @@ export async function runCouncilMcpMain(args: string[]): Promise<void> {
     } : {}),
   });
 
+  if (managedRuntime && !httpServer) {
+    throw new Error("Council owner-control service could not bind 127.0.0.1:17842; close the conflicting local process and reconnect the Tunnel");
+  }
   if (httpServer && managedRuntime) {
     try {
       const ownerPort = httpServer.port;
@@ -121,16 +116,9 @@ export async function runCouncilMcpMain(args: string[]): Promise<void> {
     }
   }
 
-  const wakeDelivery = managedRuntime || fallbackWake
-    ? new HybridCouncilWakeDelivery(store, managedRuntime, fallbackWake)
-    : undefined;
-
+  const wakeDelivery = managedRuntime || fallbackWake ? new HybridCouncilWakeDelivery(store, managedRuntime, fallbackWake) : undefined;
   try {
-    await runCouncilMcpServer({
-      store,
-      ...(wakeDelivery ? { wakeDelivery } : {}),
-      ...(managedRuntime ? { managedRuntime } : {}),
-    });
+    await runCouncilMcpServer({ store, ...(wakeDelivery ? { wakeDelivery } : {}), ...(managedRuntime ? { managedRuntime } : {}) });
   } finally {
     ownerToken = undefined;
     rmSync(ownerDescriptorPath, { force: true });
