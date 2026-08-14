@@ -22,6 +22,7 @@ const browserHostModule = require("./browser-host.cjs");
 const controlServerModule = require("./control-server.cjs");
 const { createCouncilBrowserHostClass } = require("./council-browser-host.cjs");
 const { createCouncilBrowserControlServerClass } = require("./council-control-server.cjs");
+const { deriveCouncilCapabilities } = require("./council-capabilities.cjs");
 const { CouncilConnectionSupervisor } = require("./council-connection-supervisor.cjs");
 const { bindCurrentConversationAsLead } = require("./council-owner-client.cjs");
 const { getAutostart, setAutostart } = require("./autostart.cjs");
@@ -175,30 +176,19 @@ function validateBounds(value) {
   return value;
 }
 function smokePassedForCurrentVersion(state) { return state.browserSmokePassed === true && state.browserSmokeVersion === app.getVersion(); }
-function capabilityState(available) {
-  return available
-    ? { available: true, state: "ready" }
-    : { available: false, state: "error", reason: { code: "CAPABILITY_UNAVAILABLE", retryable: true } };
-}
 function councilCapabilities(stateStore) {
   const state = stateStore.read();
-  const tunnelReady = state.mcpRuntimeInstalled === true && state.mcpSetupComplete === true;
-  return {
-    secureTunnel: capabilityState(tunnelReady),
-    localRepo: capabilityState(false),
-    githubConnector: capabilityState(false),
-    fullMcp: capabilityState(tunnelReady),
-    wakeEngine: capabilityState(tunnelReady),
-  };
+  const configured = state.mcpRuntimeInstalled === true || state.mcpSetupComplete === true;
+  // Configuration flags prove only setup history, never current liveness. Until the launcher has
+  // explicit live health evidence, fail closed instead of advertising stale capabilities as ready.
+  return deriveCouncilCapabilities({ configured, runtimeLive: false });
 }
 function councilRuntimeSnapshot() {
   return councilConnectionSupervisor?.snapshot() ?? {
     controlPlane: { state: "connecting" },
     projection: { syncState: "idle" },
     managedProject: { state: "unattached", reason: { code: "PROJECT_UNATTACHED", retryable: false } },
-    capabilities: {
-      secureTunnel: capabilityState(false), localRepo: capabilityState(false), githubConnector: capabilityState(false), fullMcp: capabilityState(false), wakeEngine: capabilityState(false),
-    },
+    capabilities: deriveCouncilCapabilities({ configured: false, runtimeLive: false }),
   };
 }
 
