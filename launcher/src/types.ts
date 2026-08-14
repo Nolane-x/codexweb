@@ -90,7 +90,23 @@ export interface CouncilDecisionView { id: string; roomId: string; createdByAgen
 export interface CouncilTaskView { id: string; roomId: string; assigneeAgentId?: string; title: string; description: string; status: "todo" | "claimed" | "in_progress" | "review" | "done" | "blocked"; updatedAt: string }
 export interface CouncilWakeView { id: string; targetAgentId: string; sourceAgentId?: string; roomId: string; reason: string; status: string; attempts: number; lastError?: string; updatedAt: string }
 
-export interface ManagedProjectView { roomId: string; name: string; mission: string; leadAgentId: string }
+export interface RepoWorkspaceBindingView {
+  schemaVersion: 1;
+  provider: "github";
+  repoId: string;
+  owner: string;
+  name: string;
+  defaultBranch: string;
+  baseCommit: string;
+}
+
+export interface ManagedProjectView {
+  roomId: string;
+  name: string;
+  mission: string;
+  leadAgentId: string;
+  workspace?: RepoWorkspaceBindingView;
+}
 export interface ManagedAgentView {
   id: string;
   name: string;
