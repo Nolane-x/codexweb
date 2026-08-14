@@ -24,6 +24,19 @@ class FakeLegacyBrowserHost {
 
 const CouncilHost = createCouncilBrowserHostClass(FakeLegacyBrowserHost);
 
+test("Council wrapper tolerates legacy snapshot dispatch before subclass initialization", () => {
+  class SnapshotDuringConstructor extends FakeLegacyBrowserHost {
+    constructor() {
+      super();
+      this.constructorSnapshot = this.snapshot();
+    }
+  }
+  const EarlyCouncilHost = createCouncilBrowserHostClass(SnapshotDuringConstructor);
+  const host = new EarlyCouncilHost();
+  assert.deepEqual(host.constructorSnapshot, { tabs: [] });
+  assert.ok(host.agentSurfaceRegistry);
+});
+
 test("persistent binding reuses the same surface across different trace ids", async () => {
   const host = new CouncilHost();
   const first = host.beginTurn("trace_1", false, 10, "agent:alice");
