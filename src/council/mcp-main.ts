@@ -76,7 +76,11 @@ export async function runCouncilMcpMain(args: string[]): Promise<void> {
   const httpServer = startCouncilHttpServer(store, {
     onError: message => console.error(`[council-http] ${message}`),
     ...(managedRuntime ? {
-      managedSnapshot: () => ({ project: managedRuntime!.activeProject() ?? null, agents: managedRuntime!.publicAgents() }),
+      managedSnapshot: () => ({
+        project: managedRuntime!.activeProject() ?? null,
+        agents: managedRuntime!.publicAgents(),
+        ...(autonomy ? { autonomy: autonomy.status() } : {}),
+      } as any),
       owner: {
         token: () => ownerToken,
         startLead: async input => {
