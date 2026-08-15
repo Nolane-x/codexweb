@@ -1,6 +1,6 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { CouncilConnectionSupervisor } = require("../electron/council-connection-supervisor.cjs");
+const { CouncilConnectionSupervisor, validateSnapshotEnvelope } = require("../electron/council-connection-supervisor.cjs");
 
 const canonicalState = {
   version: 1,
@@ -36,6 +36,24 @@ const availableRuntimeCapabilities = {
   wakeEngine: { available: true, state: "ready" },
 };
 
+test("legacy canonical snapshot without presence normalizes to unknown-compatible empty presence", async () => {
+  const supervisor = new CouncilConnectionSupervisor({
+    client: { getSnapshot: async () => ({ schemaVersion: 1, state: canonicalState, cursor: "C1", generatedAt: canonicalState.generatedAt }) },
+    capabilities: () => unavailableCapabilities,
+  });
+  await supervisor.hydrateOnce();
+  assert.deepEqual(supervisor.snapshot().projection.state.presence, []);
+});
+
+test("malformed presence is rejected at the renderer sync boundary", () => {
+  assert.throws(() => validateSnapshotEnvelope({
+    schemaVersion: 1,
+    state: { ...canonicalState, presence: [{ agentId: "alpha", freshness: "fresh" }] },
+    cursor: "C1",
+    generatedAt: canonicalState.generatedAt,
+  }), /presence/i);
+});
+
 test("live canonical projection stays visible when every local execution capability is unavailable", async () => {
   const supervisor = new CouncilConnectionSupervisor({
     client: { getSnapshot: async () => ({ schemaVersion: 1, state: canonicalState, cursor: "C1", generatedAt: canonicalState.generatedAt }) },
@@ -51,6 +69,7 @@ test("live canonical projection stays visible when every local execution capabil
   assert.equal(runtime.projection.state.rooms.length, 2);
   assert.equal(runtime.projection.state.agents.length, 2);
   assert.equal(runtime.projection.state.messages.length, 1);
+  assert.deepEqual(runtime.projection.state.presence, []);
   assert.equal(runtime.managedProject.state, "unattached");
   assert.equal(runtime.capabilities.localRepo.available, false);
 });
