@@ -1,6 +1,6 @@
 import type { CouncilStore } from "./store";
 import { isActiveCouncilWake } from "./store";
-import type { CouncilAutonomyWorkStore, AutonomyWorkKind } from "./autonomy-work-store";
+import type { CouncilAutonomyWorkStore, AutonomyWorkKind, AutonomyWorkState } from "./autonomy-work-store";
 
 export type ManagedRuntimeStatus = "active" | "sleeping" | "queued" | "failed";
 
@@ -11,6 +11,8 @@ export interface CouncilAutonomyRouterOptions {
   managedStatus: (agentId: string) => ManagedRuntimeStatus | undefined;
   scanIntervalMs?: number;
 }
+
+const ACTIVE_WORK = new Set<AutonomyWorkState>(["queued", "leased", "running", "retry-wait"]);
 
 export class CouncilAutonomyRouter {
   private readonly council: CouncilStore;
@@ -60,6 +62,8 @@ export class CouncilAutonomyRouter {
       // also repairs the crash window where a wake was persisted before its durable work item.
       for (const wake of snapshot.wakes) {
         if (!managed.has(wake.targetAgentId) || !isActiveCouncilWake(wake)) continue;
+        const alreadyRouted = this.work.snapshot().items.some(item => item.wakeId === wake.id && ACTIVE_WORK.has(item.state));
+        if (alreadyRouted) continue;
         const dedupeKey = `wake:${wake.roomId}:${wake.targetAgentId}:event:${wake.id}`;
         if (this.work.active(dedupeKey)) continue;
         this.work.enqueue({
