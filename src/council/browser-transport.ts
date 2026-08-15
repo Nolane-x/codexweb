@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import type { CouncilExecutionPhase } from "./autonomy-errors";
 import type { CouncilObservationHealth } from "./observation-store";
 
 export class CouncilConversationUnavailableError extends Error {
@@ -22,9 +23,11 @@ export interface CouncilPromptAttachment {
   buffer: Buffer;
 }
 
+export type CouncilExecutionObserver = (phase: CouncilExecutionPhase) => void;
+
 export interface CouncilPersistentChatDriver {
-  resume(input: { surfaceId: string; conversationUrl: string; prompt: string; attachments?: CouncilPromptAttachment[]; signal?: AbortSignal }): Promise<{ answer: string; conversationUrl: string }>;
-  create(input: { surfaceId: string; prompt: string; attachments?: CouncilPromptAttachment[]; signal?: AbortSignal }): Promise<{ answer: string; conversationUrl: string }>;
+  resume(input: { surfaceId: string; conversationUrl: string; prompt: string; attachments?: CouncilPromptAttachment[]; signal?: AbortSignal; onPhase?: CouncilExecutionObserver }): Promise<{ answer: string; conversationUrl: string }>;
+  create(input: { surfaceId: string; prompt: string; attachments?: CouncilPromptAttachment[]; signal?: AbortSignal; onPhase?: CouncilExecutionObserver }): Promise<{ answer: string; conversationUrl: string }>;
   capture?(input: { surfaceId: string; conversationUrl: string; signal?: AbortSignal }): Promise<{ png: Buffer; conversationUrl: string; health: CouncilObservationHealth; note?: string }>;
 }
 
@@ -35,6 +38,7 @@ export interface CouncilBrowserTransportRunInput {
   resurrectionPrompt?: string;
   attachments?: CouncilPromptAttachment[];
   signal?: AbortSignal;
+  onPhase?: CouncilExecutionObserver;
 }
 export interface CouncilBrowserTransportResult { answer: string; conversationUrl: string; resumed: boolean }
 export interface CouncilBrowserCaptureResult { png: Buffer; conversationUrl: string; health: CouncilObservationHealth; note?: string }
@@ -43,6 +47,12 @@ function validAgentId(value: string): string {
   const id = value.trim();
   if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(id)) throw new Error("agentId is invalid");
   return id;
+}
+
+function emitPhase(observer: CouncilExecutionObserver | undefined, phase: CouncilExecutionPhase): void {
+  if (!observer) return;
+  try { observer(phase); }
+  catch { /* Execution telemetry must never mutate browser-turn semantics. */ }
 }
 
 export class CouncilBrowserTransport {
@@ -67,6 +77,7 @@ export class CouncilBrowserTransport {
   private async runAttempt(input: CouncilBrowserTransportRunInput, bindingKey: string): Promise<CouncilBrowserTransportResult> {
     const traceId = `council_${randomUUID().replaceAll("-", "")}`;
     const lease = await this.control.start({ traceId, bindingKey });
+    emitPhase(input.onPhase, "lease-acquired");
     const heartbeat = this.heartbeat(traceId);
     try {
       let result: { answer: string; conversationUrl: string };
@@ -79,6 +90,7 @@ export class CouncilBrowserTransport {
             prompt: input.prompt,
             ...(input.attachments?.length ? { attachments: input.attachments } : {}),
             signal: input.signal,
+            onPhase: input.onPhase,
           });
           resumed = true;
         } catch (error) {
@@ -90,6 +102,7 @@ export class CouncilBrowserTransport {
             prompt: resurrection,
             ...(input.attachments?.length ? { attachments: input.attachments } : {}),
             signal: input.signal,
+            onPhase: input.onPhase,
           });
         }
       } else {
@@ -98,6 +111,7 @@ export class CouncilBrowserTransport {
           prompt: input.resurrectionPrompt?.trim() || input.prompt,
           ...(input.attachments?.length ? { attachments: input.attachments } : {}),
           signal: input.signal,
+          onPhase: input.onPhase,
         });
       }
       await this.control.end({ traceId, status: "completed" });
