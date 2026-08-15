@@ -197,9 +197,13 @@ export class CouncilAutonomyDispatcher {
       } else if (classification.retryableBeforeSubmit && leased.attempt < leased.maxAttempts) {
         const exponential = Math.min(60_000, 1_000 * (2 ** Math.max(0, leased.attempt - 1)));
         const jitter = Math.floor(exponential * 0.1 * Math.max(0, Math.min(1, this.random())));
-        const retryAt = new Date(this.now() + exponential + jitter).toISOString();
-        this.work.retry(leased.id, this.owner, { notBefore: retryAt, code: classification.code, message });
-        if (leased.targetAgentId) this.health.observeFailure(leased.targetAgentId, classification.code, message, "dispatcher");
+        let retryAtMs = this.now() + exponential + jitter;
+        if (leased.targetAgentId) {
+          this.health.observeFailure(leased.targetAgentId, classification.code, message, "dispatcher");
+          const breaker = this.health.canAttempt(leased.targetAgentId);
+          if (!breaker.allowed && breaker.retryAt) retryAtMs = Math.max(retryAtMs, Date.parse(breaker.retryAt));
+        }
+        this.work.retry(leased.id, this.owner, { notBefore: new Date(retryAtMs).toISOString(), code: classification.code, message });
         this.auditEvent(leased, "retry", classification.code, message);
       } else {
         this.work.fail(leased.id, this.owner, classification.code, message);
