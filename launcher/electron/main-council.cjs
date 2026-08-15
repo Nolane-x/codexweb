@@ -158,7 +158,7 @@ function createWindow({ logger, stateStore, startHidden }) {
     if (saved.fullscreen) window.setFullScreen(true);
     if (!startHidden) window.show();
   });
-  trackWindowState(window, path.join(app.getPath("userData"), "window-state.json"), screen.getAllDisplays(), error => logger.warn("launcher.window_state_write_failed", { message: error instanceof Error ? error.message : String(error) }));
+  trackWindowState(window, path.join(app.getPath("userData"), "window-state.json"), error => logger.warn("launcher.window_state_write_failed", { message: error instanceof Error ? error.message : String(error) }));
   return window;
 }
 
