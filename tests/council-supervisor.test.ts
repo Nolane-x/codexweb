@@ -73,4 +73,28 @@ describe("CouncilSupervisor", () => {
       supervisor.stop();
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
+
+  test("routes manual scans into durable autonomy and cancels queued periodic scans when manager is cleared", async () => {
+    const root = mkdtempSync(join(tmpdir(), "council-supervisor-autonomy-"));
+    const runtime = {
+      activeProject: () => ({ roomId: "project", name: "Demo", mission: "Build", leadAgentId: "lead" }),
+      supervisorAgents: () => [{ id: "lead", name: "Lead", role: "Manager", mandate: "Lead", permissions: [], conversationUrl: "https://chatgpt.com/c/lead", createdAt: "", updatedAt: "" }],
+      publicAgents: () => [],
+      schedulerSnapshot: () => ({ active: null, queued: 0, completed: 0, failed: 0 }),
+    };
+    const events: string[] = [];
+    try {
+      const supervisor = new CouncilSupervisor({ runtime: runtime as any, council: { snapshot: () => ({ tasks: [], wakes: [], messages: [] }) } as any, observations: new CouncilObservationStore(join(root, "observations")), statePath: join(root, "supervisor.json") });
+      supervisor.attachAutonomy({
+        enqueueObservation: async manager => { events.push(`enqueue:${manager}`); return { id: "work" }; },
+        cancelQueuedObservations: () => { events.push("cancel"); return 2; },
+      });
+      supervisor.setManager("lead");
+      await supervisor.requestRun();
+      expect(events).toContain("enqueue:lead");
+      supervisor.setManager(undefined);
+      expect(events).toContain("cancel");
+      supervisor.stop();
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
 });

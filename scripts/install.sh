@@ -2,7 +2,7 @@
 set -eu
 
 REPOSITORY="${CODEX_CHATGPT_WEB_REPOSITORY:-Nolane-x/codexweb}"
-VERSION="${CODEX_CHATGPT_WEB_VERSION:-3.4.0}"
+VERSION="${CODEX_CHATGPT_WEB_VERSION:-3.5.0}"
 BIN_DIR="${CODEX_CHATGPT_WEB_BIN_DIR:-$HOME/.local/bin}"
 LIB_DIR="${CODEX_CHATGPT_WEB_LIB_DIR:-$HOME/.local/lib/codex-chatgpt-web}"
 DOC_DIR="${CODEX_CHATGPT_WEB_DOC_DIR:-$HOME/.local/share/doc/codex-chatgpt-web}"
@@ -57,7 +57,7 @@ if [ -e "$BACKUP_DIR" ]; then rm -rf "$BACKUP_DIR"; fi
 
 echo "Installed Council runtime $TARGET_DIR"
 if [ "$#" -gt 0 ]; then
-  echo "Council 3.4 no longer performs Codex setup from the runtime installer. Configure the Secure MCP Tunnel from the Electron app." >&2
+  echo "Council 3.5 no longer performs Codex setup from the runtime installer. Configure the Secure MCP Tunnel from the Electron app." >&2
   exit 2
 fi
 echo "Next: open the CodexWeb Council Electron app, sign in to ChatGPT, connect the Tunnel, then bind your Project chat as Lead."

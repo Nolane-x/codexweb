@@ -3,7 +3,7 @@ import { COUNCIL_MCP_SERVER_NAME, COUNCIL_TOOL_NAMES } from "../src/council/mcp-
 import { actorSchema } from "../src/council/mcp-shared";
 
 describe("Council MCP contract", () => {
-  test("exposes collaboration, managed-agent, repo-binding, decision, task, wake, continuity and retained observation tools", () => {
+  test("exposes collaboration, managed-agent, repo-binding, decision, task, wake, continuity, observation and autonomy tools", () => {
     expect(COUNCIL_MCP_SERVER_NAME).toBe("codexweb-council");
     for (const name of [
       "council_join",
@@ -20,6 +20,8 @@ describe("Council MCP contract", () => {
       "council_managed_status",
       "council_observation_list",
       "council_observation_read",
+      "council_autonomy_status",
+      "council_autonomy_audit",
     ]) expect(COUNCIL_TOOL_NAMES).toContain(name as never);
   });
   test("does not expose legacy Codex broker tools", () => { expect(COUNCIL_TOOL_NAMES.some(name => name.startsWith("codex_"))).toBe(false); });

@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
-import { CouncilConversationUnavailableError, CouncilSurfaceUnavailableError, type CouncilPromptAttachment } from "./browser-transport";
+import { CouncilConversationUnavailableError, CouncilSurfaceUnavailableError, type CouncilExecutionObserver, type CouncilPromptAttachment } from "./browser-transport";
 import type { CouncilManagedRuntime } from "./managed-runtime";
 import type { CouncilObservationAgentRecord, CouncilObservationHealth, CouncilObservationRecord, CouncilObservationStore, CouncilObservationSummary } from "./observation-store";
 import type { CouncilStore } from "./store";
@@ -21,6 +21,12 @@ export interface CouncilSupervisorStatus {
   lastRunId: string | null;
   lastError: string | null;
   scheduler: ReturnType<CouncilManagedRuntime["schedulerSnapshot"]>;
+}
+
+export interface CouncilSupervisorAutonomyHooks {
+  enqueueObservation(managerAgentId: string): Promise<unknown>;
+  cancelQueuedObservations(): number | Promise<number>;
+  observeHealth?(agentId: string, health: CouncilObservationHealth, note?: string): void;
 }
 
 function safeError(error: unknown): string {
@@ -96,6 +102,7 @@ export class CouncilSupervisor {
   private lastRunId?: string;
   private lastError?: string;
   private stopped = false;
+  private autonomy?: CouncilSupervisorAutonomyHooks;
 
   constructor(options: {
     runtime: CouncilManagedRuntime;
@@ -111,6 +118,8 @@ export class CouncilSupervisor {
     this.intervalMs = Number.isFinite(options.intervalMs) && options.intervalMs! >= 1_000 ? Math.trunc(options.intervalMs!) : COUNCIL_SUPERVISOR_INTERVAL_MS;
     this.managerAgentId = this.loadManager();
   }
+
+  attachAutonomy(hooks: CouncilSupervisorAutonomyHooks | undefined): void { this.autonomy = hooks; }
 
   start(): void {
     this.stopped = false;
@@ -148,17 +157,32 @@ export class CouncilSupervisor {
     if (next) {
       this.stopped = false;
       this.schedule(COUNCIL_SUPERVISOR_INITIAL_DELAY_MS);
+    } else if (this.autonomy) {
+      void Promise.resolve(this.autonomy.cancelQueuedObservations()).catch(() => {});
     }
     return this.status();
   }
 
-  async runNow(): Promise<CouncilObservationRecord> {
+  async requestRun(): Promise<unknown> {
     if (!this.managerAgentId) throw new Error("Select a managed Project Manager before running Council supervision");
+    if (this.timer) clearTimeout(this.timer);
+    this.timer = undefined;
+    this.nextRunAt = undefined;
+    if (this.autonomy) return await this.autonomy.enqueueObservation(this.managerAgentId);
+    return await this.runNow();
+  }
+
+  async runNow(onPhase?: CouncilExecutionObserver): Promise<CouncilObservationRecord> {
+    if (!this.managerAgentId) throw new Error("Select a managed Project Manager before running Council supervision");
+    return await this.executeObservation(this.managerAgentId, onPhase);
+  }
+
+  async executeObservation(managerAgentId: string, onPhase?: CouncilExecutionObserver): Promise<CouncilObservationRecord> {
     if (this.running) return await this.running;
     if (this.timer) clearTimeout(this.timer);
     this.timer = undefined;
     this.nextRunAt = undefined;
-    const operation = this.runCycle(this.managerAgentId);
+    const operation = this.runCycle(managerAgentId, onPhase);
     this.running = operation;
     try {
       const result = await operation;
@@ -198,12 +222,13 @@ export class CouncilSupervisor {
     this.timer = setTimeout(() => {
       this.timer = undefined;
       this.nextRunAt = undefined;
-      void this.runNow().catch(() => {});
+      if (this.autonomy && this.managerAgentId) void this.autonomy.enqueueObservation(this.managerAgentId).catch(error => { this.lastError = safeError(error); this.schedule(this.intervalMs); });
+      else void this.runNow().catch(() => {});
     }, delay);
     this.timer.unref?.();
   }
 
-  private async runCycle(managerAgentId: string): Promise<CouncilObservationRecord> {
+  private async runCycle(managerAgentId: string, onPhase?: CouncilExecutionObserver): Promise<CouncilObservationRecord> {
     const project = this.runtime.activeProject();
     if (!project) throw new Error("Council supervisor requires an active managed project");
     if (!this.runtime.supervisorAgents().some(agent => agent.id === managerAgentId)) {
@@ -217,14 +242,16 @@ export class CouncilSupervisor {
       for (const agent of this.runtime.supervisorAgents()) {
         const capturedAt = new Date().toISOString();
         if (!agent.conversationUrl) {
-          manifest.push(this.observations.addAgent(run.id, {
+          const record = this.observations.addAgent(run.id, {
             agentId: agent.id,
             name: agent.name,
             role: agent.role,
             capturedAt,
             health: "sleeping",
             note: "No persistent ChatGPT conversation has been established yet",
-          }));
+          });
+          manifest.push(record);
+          this.autonomy?.observeHealth?.(agent.id, record.health, record.note);
           continue;
         }
         try {
@@ -238,19 +265,22 @@ export class CouncilSupervisor {
             ...(capture.note ? { note: capture.note } : {}),
           }, capture.png);
           manifest.push(record);
+          this.autonomy?.observeHealth?.(agent.id, record.health, record.note);
           if (record.screenshotId && attachments.length < MAX_MANAGER_SCREENSHOTS) {
             attachments.push({ name: `${agent.id}-${record.screenshotId}`, mimeType: "image/png", buffer: capture.png });
           }
         } catch (error) {
           const classified = classifyFailure(error);
-          manifest.push(this.observations.addAgent(run.id, {
+          const record = this.observations.addAgent(run.id, {
             agentId: agent.id,
             name: agent.name,
             role: agent.role,
             capturedAt,
             health: classified.health,
             note: classified.note,
-          }));
+          });
+          manifest.push(record);
+          this.autonomy?.observeHealth?.(agent.id, record.health, record.note);
         }
       }
 
@@ -273,7 +303,7 @@ export class CouncilSupervisor {
           : "All captured screenshots are attached.",
         "End with exactly one valid <COUNCIL_ACTIONS version=\"1\"> block as required by your managed Council protocol.",
       ].join("\n\n");
-      const analysis = await this.runtime.runManagerObservation(managerAgentId, prompt, attachments);
+      const analysis = await this.runtime.runManagerObservation(managerAgentId, prompt, attachments, onPhase);
       return this.observations.complete(run.id, { managerAnalysis: analysis });
     } catch (error) {
       this.observations.fail(run.id, safeError(error));

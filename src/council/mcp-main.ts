@@ -2,6 +2,7 @@ import { rmSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { getConfigDir, loadConfig } from "../config";
 import { CouncilAgentRegistry } from "./agent-registry";
+import { CouncilAutonomyKernel } from "./autonomy-kernel";
 import { CouncilBrowserTransport } from "./browser-transport";
 import { parseCouncilActionFooter } from "./browser-action-parser";
 import { HybridCouncilWakeDelivery } from "./hybrid-wake-delivery";
@@ -42,6 +43,7 @@ export async function runCouncilMcpMain(args: string[]): Promise<void> {
   let fallbackWake: CouncilWakeEngine | undefined;
   let observations: CouncilObservationStore | undefined;
   let supervisor: CouncilSupervisor | undefined;
+  let autonomy: CouncilAutonomyKernel | undefined;
   try {
     const config = loadConfig();
     if (config.browserHost === "launcher" && config.browserHostDescriptorPath) {
@@ -63,6 +65,7 @@ export async function runCouncilMcpMain(args: string[]): Promise<void> {
         observations,
         statePath: join(councilDir, "supervisor.json"),
       });
+      autonomy = new CouncilAutonomyKernel({ rootDir: councilDir, council: store, runtime: managedRuntime, supervisor });
     }
     if (config.mode === "full") fallbackWake = new CouncilWakeEngine(store, config);
   } catch (error) {
@@ -73,7 +76,11 @@ export async function runCouncilMcpMain(args: string[]): Promise<void> {
   const httpServer = startCouncilHttpServer(store, {
     onError: message => console.error(`[council-http] ${message}`),
     ...(managedRuntime ? {
-      managedSnapshot: () => ({ project: managedRuntime!.activeProject() ?? null, agents: managedRuntime!.publicAgents() }),
+      managedSnapshot: () => ({
+        project: managedRuntime!.activeProject() ?? null,
+        agents: managedRuntime!.publicAgents(),
+        ...(autonomy ? { autonomy: autonomy.status() } : {}),
+      } as any),
       owner: {
         token: () => ownerToken,
         startLead: async input => {
@@ -112,7 +119,7 @@ export async function runCouncilMcpMain(args: string[]): Promise<void> {
           supervisor: {
             status: () => supervisor!.status(),
             setManager: (agentId?: string) => supervisor!.setManager(agentId),
-            runNow: () => supervisor!.runNow(),
+            runNow: () => supervisor!.requestRun(),
             history: () => supervisor!.history(),
             observation: (runId: string) => supervisor!.observation(runId),
             screenshot: (runId: string, screenshotId: string) => supervisor!.screenshot(runId, screenshotId),
@@ -133,6 +140,7 @@ export async function runCouncilMcpMain(args: string[]): Promise<void> {
       if (typeof ownerPort !== "number" || !Number.isInteger(ownerPort)) throw new Error("Council owner server did not expose a valid loopback port");
       const descriptor = issueCouncilOwnerControl(ownerDescriptorPath, ownerPort);
       ownerToken = descriptor.token;
+      autonomy?.start();
       supervisor?.start();
     } catch (error) {
       httpServer.stop(true);
@@ -147,9 +155,11 @@ export async function runCouncilMcpMain(args: string[]): Promise<void> {
       ...(wakeDelivery ? { wakeDelivery } : {}),
       ...(managedRuntime ? { managedRuntime } : {}),
       ...(observations ? { observations } : {}),
+      ...(autonomy ? { autonomy } : {}),
     });
   } finally {
     supervisor?.stop();
+    await autonomy?.stop().catch(() => {});
     ownerToken = undefined;
     rmSync(ownerDescriptorPath, { force: true });
     httpServer?.stop(true);

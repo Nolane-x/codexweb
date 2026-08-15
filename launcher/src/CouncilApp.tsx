@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useState } from "react";
-import type { BrowserState, CouncilRuntimeViewState, LauncherSnapshot, LogRecord, ManagedAgentView } from "./types";
+import type { BrowserState, CouncilAutonomyStatusView, CouncilRuntimeViewState, LauncherSnapshot, LogRecord, ManagedAgentView } from "./types";
 import "./council-shell.css";
 
 const api = window.codexWebLauncher;
@@ -10,6 +10,15 @@ function messageOf(error: unknown): string { return error instanceof Error ? err
 function managedAgents(runtime: CouncilRuntimeViewState | null): ManagedAgentView[] {
   if (runtime?.projection.syncState !== "live" && runtime?.projection.syncState !== "stale") return [];
   return runtime.projection.state.managed?.agents ?? [];
+}
+function autonomyStatus(runtime: CouncilRuntimeViewState | null): CouncilAutonomyStatusView | null {
+  if (runtime?.projection.syncState !== "live" && runtime?.projection.syncState !== "stale") return null;
+  return runtime.projection.state.managed?.autonomy ?? null;
+}
+
+function compactHealth(value?: string): string {
+  if (!value) return "unknown";
+  return value.replace("conversation-missing", "missing chat").replace("surface-missing", "surface").replace("signed-out", "signed out");
 }
 
 export function CouncilApp() {
@@ -71,6 +80,8 @@ export function CouncilApp() {
   }, [busy]);
 
   const agents = useMemo(() => managedAgents(councilRuntime), [councilRuntime]);
+  const autonomy = useMemo(() => autonomyStatus(councilRuntime), [councilRuntime]);
+  const healthByAgent = useMemo(() => new Map((autonomy?.health ?? []).map(health => [health.agentId, health])), [autonomy]);
   const tabByAgent = useMemo(() => new Map((browser?.tabs ?? []).filter(tab => tab.agentId).map(tab => [tab.agentId!, tab])), [browser]);
   const otherTabs = useMemo(() => (browser?.tabs ?? []).filter(tab => tab.id !== "home" && !tab.agentId), [browser]);
 
@@ -120,6 +131,8 @@ export function CouncilApp() {
           <div><span>Browser</span><strong>{authenticated ? "Ready" : browser?.status ?? "Starting"}</strong></div>
           <div><span>Tunnel</span><strong>{snapshot.mcpCredentialsConfigured ? "Configured" : "Optional"}</strong></div>
           <div><span>Agents</span><strong>{agents.length || browser?.tabs.filter(tab => tab.agentId).length || 0} project</strong></div>
+          <div><span>Autonomy</span><strong className={autonomy?.dispatcher.running ? "autonomy-ok" : ""}>{autonomy ? `${autonomy.queue.totalActive} queued` : "Starting"}</strong></div>
+          <div><span>Breakers</span><strong className={autonomy?.breakerOpenCount ? "autonomy-warn" : ""}>{autonomy?.breakerOpenCount ?? 0} open</strong></div>
         </div>
       </aside>
 
@@ -132,7 +145,7 @@ export function CouncilApp() {
                 <button disabled={!browser?.canGoForward || busy} onClick={() => void run(() => api.navigateBrowser("forward"))}>→</button>
                 <button disabled={busy} onClick={() => void run(() => api.navigateBrowser("reload"))}>↻</button>
               </div>
-              <div className="council-browser-location"><i className={authenticated ? "ok" : "warn"} /><span>{browser?.title || "ChatGPT"}</span><small>{browser?.message || "Starting browser"}</small></div>
+              <div className="council-browser-location"><i className={authenticated ? "ok" : "warn"} /><span>{browser?.title || "ChatGPT"}</span><small>{autonomy?.dispatcher.activeWorkItemId ? `Autonomy running ${autonomy.dispatcher.activeWorkItemId}` : browser?.message || "Starting browser"}</small></div>
               <div className="council-browser-actions">
                 {!authenticated ? <button className="primary" disabled={busy} onClick={() => void run(() => api.openLogin())}>Sign in to ChatGPT</button> : null}
                 <button onClick={() => void run(() => api.zoomBrowser("out"))}>−</button>
@@ -144,21 +157,24 @@ export function CouncilApp() {
               <button className={browser?.activeTabId === "home" ? "active" : ""} onClick={() => void run(() => api.selectBrowserTab("home"))}><i className="tab-home" /><span>Project chat</span></button>
               {agents.map(agent => {
                 const tab = tabByAgent.get(agent.id);
+                const health = healthByAgent.get(agent.id);
+                const healthName = health?.state ?? agent.runtimeStatus;
                 return (
-                  <button key={agent.id} className={`${tab?.active ? "active" : ""}${tab ? "" : " parked"}`} disabled={!tab || busy} title={tab ? `Open ${agent.name}` : `${agent.name} is ${agent.runtimeStatus}; its persistent conversation is saved and will reopen when called`} onClick={() => tab ? void run(() => api.selectBrowserTab(tab.id)) : undefined}>
-                    <i className={`tab-agent runtime-${agent.runtimeStatus}`} /><span>{agent.name}</span><small>{agent.runtimeStatus}</small>
+                  <button key={agent.id} className={`${tab?.active ? "active" : ""}${tab ? "" : " parked"} autonomy-health-${healthName}`} disabled={!tab || busy} title={tab ? `Open ${agent.name} · ${healthName}` : `${agent.name} is ${agent.runtimeStatus}; durable health=${healthName}; its persistent conversation is saved and will reopen when called`} onClick={() => tab ? void run(() => api.selectBrowserTab(tab.id)) : undefined}>
+                    <i className={`tab-agent runtime-${agent.runtimeStatus}`} /><span>{agent.name}</span><small>{compactHealth(healthName)}</small>{health?.consecutiveFailures ? <b className="agent-failure-count">{health.consecutiveFailures}</b> : null}
                   </button>
                 );
               })}
               {otherTabs.map(tab => <button key={tab.id} className={tab.active ? "active" : ""} onClick={() => void run(() => api.selectBrowserTab(tab.id))}><i /><span>{tab.title}</span></button>)}
             </div>
+            {autonomy ? <div className="council-autonomy-strip"><span><i className={autonomy.dispatcher.running ? "live" : ""} /> durable loop</span><strong>{autonomy.queue.totalActive} active</strong><small>{autonomy.dispatcher.retryWait} retry wait · {autonomy.dispatcher.uncertain} uncertain · {autonomy.breakerOpenCount} breakers · {autonomy.audit.count} audit events</small></div> : null}
             <div className="council-browser-slot" ref={setSlot}>
               {!authenticated ? <div className="council-browser-empty"><span>◎</span><strong>Sign in once, then open the persistent Project conversation you want as Lead.</strong><p>After the Tunnel is connected, open Agents and choose “Bind current ChatGPT as Lead”.</p></div> : null}
             </div>
           </>
         ) : null}
 
-        {view === "activity" ? <Activity logs={logs} /> : null}
+        {view === "activity" ? <Activity logs={logs} autonomy={autonomy} /> : null}
         {view === "settings" ? <Settings snapshot={snapshot} busy={busy} run={run} /> : null}
       </section>
 
@@ -167,8 +183,17 @@ export function CouncilApp() {
   );
 }
 
-function Activity({ logs }: { logs: LogRecord[] }) {
-  return <div className="council-page"><header><span>RUNTIME</span><h2>Activity</h2><p>Local launcher and Council events. Secrets are redacted by the logger boundary.</p></header><div className="council-log-list">{logs.length ? logs.map((log, index) => <article key={`${log.at}-${index}`}><time>{new Date(log.at).toLocaleTimeString()}</time><b className={log.level}>{log.level}</b><strong>{log.event}</strong><code>{JSON.stringify(log.detail)}</code></article>) : <p>No activity yet.</p>}</div></div>;
+function Activity({ logs, autonomy }: { logs: LogRecord[]; autonomy: CouncilAutonomyStatusView | null }) {
+  return <div className="council-page"><header><span>RUNTIME</span><h2>Activity</h2><p>Local launcher, durable autonomy and Council events. Secrets are redacted by the logger/audit boundaries.</p></header>
+    {autonomy ? <div className="council-autonomy-cards">
+      <article><span>DURABLE QUEUE</span><strong>{autonomy.queue.totalActive}</strong><small>{autonomy.dispatcher.activeWorkItemId ? `running ${autonomy.dispatcher.activeWorkItemId}` : "idle"}</small></article>
+      <article><span>UNCERTAIN</span><strong className={autonomy.dispatcher.uncertain ? "warn" : ""}>{autonomy.dispatcher.uncertain}</strong><small>never auto-retried</small></article>
+      <article><span>BREAKERS</span><strong className={autonomy.breakerOpenCount ? "warn" : ""}>{autonomy.breakerOpenCount}</strong><small>limited / signed-out / quarantined</small></article>
+      <article><span>AUDIT</span><strong>{autonomy.audit.count}</strong><small>safe retained transitions</small></article>
+    </div> : null}
+    {autonomy?.health.length ? <div className="council-health-grid">{autonomy.health.map(item => <article key={item.agentId}><div><strong>{item.agentId}</strong><small>{item.lastFailureCode ?? "no failure"}</small></div><em className={`health-${item.state}`}>{compactHealth(item.state)}</em><span>{item.cooldownUntil ? `cooldown until ${new Date(item.cooldownUntil).toLocaleTimeString()}` : item.lastSuccessAt ? `last success ${new Date(item.lastSuccessAt).toLocaleTimeString()}` : "awaiting evidence"}</span></article>)}</div> : null}
+    <div className="council-log-list">{logs.length ? logs.map((log, index) => <article key={`${log.at}-${index}`}><time>{new Date(log.at).toLocaleTimeString()}</time><b className={log.level}>{log.level}</b><strong>{log.event}</strong><code>{JSON.stringify(log.detail)}</code></article>) : <p>No activity yet.</p>}</div>
+  </div>;
 }
 
 function Settings({ snapshot, busy, run }: { snapshot: LauncherSnapshot; busy: boolean; run: (action: () => Promise<unknown>) => Promise<void> }) {
