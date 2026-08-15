@@ -24,7 +24,17 @@ const { createCouncilBrowserHostClass } = require("./council-browser-host.cjs");
 const { createCouncilBrowserControlServerClass } = require("./council-control-server.cjs");
 const { deriveCouncilCapabilities } = require("./council-capabilities.cjs");
 const { CouncilConnectionSupervisor } = require("./council-connection-supervisor.cjs");
-const { bindCurrentConversationAsLead } = require("./council-owner-client.cjs");
+const {
+  bindCurrentConversationAsLead,
+  clearObservations,
+  deleteObservation,
+  listObservations,
+  readObservation,
+  readObservationScreenshot,
+  runSupervisorNow,
+  setSupervisorManager,
+  supervisorStatus,
+} = require("./council-owner-client.cjs");
 const { getAutostart, setAutostart } = require("./autostart.cjs");
 const { createLogger, installProcessDiagnosticGuards, registerLoggedIpc } = require("./logging.cjs");
 const { RuntimeHost, COUNCIL_CONNECTOR_NAME } = require("./runtime.cjs");
@@ -148,7 +158,7 @@ function createWindow({ logger, stateStore, startHidden }) {
     if (saved.fullscreen) window.setFullScreen(true);
     if (!startHidden) window.show();
   });
-  trackWindowState(window, path.join(app.getPath("userData"), "window-state.json"), error => logger.warn("launcher.window_state_write_failed", { message: error instanceof Error ? error.message : String(error) }));
+  trackWindowState(window, path.join(app.getPath("userData"), "window-state.json"), screen.getAllDisplays(), error => logger.warn("launcher.window_state_write_failed", { message: error instanceof Error ? error.message : String(error) }));
   return window;
 }
 
@@ -241,6 +251,17 @@ function registerIpc({ logger, stateStore }) {
     const projectName = typeof input.projectName === "string" ? input.projectName.trim().slice(0, 160) : "ChatGPT Project";
     return await bindCurrentConversationAsLead({ conversationUrl, projectName: projectName || "ChatGPT Project" });
   });
+  handle("launcher:council-supervisor-status", () => supervisorStatus());
+  handle("launcher:council-supervisor-manager", (_event, agentId) => {
+    if (agentId !== null && agentId !== undefined && (typeof agentId !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(agentId))) throw new Error("Council manager agent id is invalid");
+    return setSupervisorManager(typeof agentId === "string" ? agentId : null);
+  });
+  handle("launcher:council-supervisor-run", () => runSupervisorNow());
+  handle("launcher:council-observations-list", () => listObservations());
+  handle("launcher:council-observation-read", (_event, runId) => readObservation(runId));
+  handle("launcher:council-observation-screenshot", (_event, runId, screenshotId) => readObservationScreenshot(runId, screenshotId));
+  handle("launcher:council-observation-delete", (_event, runId) => deleteObservation(runId));
+  handle("launcher:council-observations-clear", () => clearObservations());
   handle("launcher:set-mcp-step", (_event, step) => { if (!Number.isInteger(step) || step < 0 || step > 2) throw new Error("Invalid MCP guide step"); return stateStore.update({ mcpGuideStep: step }); });
   handle("launcher:autostart", (_event, enabled) => { const desired = enabled === true; const autostart = setAutostart(app, desired); return { state: stateStore.update({ autoStart: desired }), ...autostart }; });
   handle("launcher:set-preference", (_event, key, value) => { if (key !== "keepRunningOnClose" && key !== "showBrowserDuringTurns") throw new Error("Unknown preference"); return stateStore.update({ [key]: value === true }); });
