@@ -44,6 +44,18 @@ function bounded(value: string | undefined, max: number): string | undefined {
   const safe = value.replace(/[\r\n\t]+/g, " ").trim().slice(0, max);
   return safe || undefined;
 }
+
+function safeReason(value: string | undefined): string | undefined {
+  const boundedValue = bounded(value, 500);
+  if (!boundedValue) return undefined;
+  return boundedValue
+    .replace(/https?:\/\/[^\s)\]}>,]+/gi, "[url]")
+    .replace(/\b[A-Za-z]:\\(?:[^\\\s]+\\)+[^\s]*/g, "[path]")
+    .replace(/(?:^|\s)\/(?:Users|home|var|tmp|private|mnt|opt|srv)\/[^\s]*/g, match => `${match.startsWith(" ") ? " " : ""}[path]`)
+    .replace(/(?:bearer|token|api[_ -]?key)\s*[:=]\s*[^\s,;]+/gi, "$1=[redacted]")
+    .slice(0, 500);
+}
+
 function clone<T>(value: T): T { return structuredClone(value); }
 
 export class CouncilAutonomyAuditStore {
@@ -75,7 +87,7 @@ export class CouncilAutonomyAuditStore {
       ...(bounded(input.taskId, 128) ? { taskId: bounded(input.taskId, 128)! } : {}),
       ...(bounded(input.wakeId, 128) ? { wakeId: bounded(input.wakeId, 128)! } : {}),
       ...(input.code ? { code: input.code } : {}),
-      ...(bounded(input.reason, 500) ? { reason: bounded(input.reason, 500)! } : {}),
+      ...(safeReason(input.reason) ? { reason: safeReason(input.reason)! } : {}),
     };
     this.state.events.push(event);
     this.prune(false);
