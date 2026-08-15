@@ -5,16 +5,20 @@ import { CouncilAgentRegistry } from "./agent-registry";
 import { CouncilAutonomyKernel } from "./autonomy-kernel";
 import { CouncilBrowserTransport } from "./browser-transport";
 import { parseCouncilActionFooter } from "./browser-action-parser";
+import { CouncilEvidenceStore } from "./evidence-store";
 import { HybridCouncilWakeDelivery } from "./hybrid-wake-delivery";
 import { startCouncilHttpServer } from "./http-server";
 import { createLauncherPersistentTurnControl } from "./launcher-turn-control";
 import { ManagedAgentStateStore } from "./managed-agent-state";
 import { ManagedProjectStateStore } from "./managed-project-state";
 import { CouncilManagedRuntime } from "./managed-runtime";
+import { CouncilMemoryIndex } from "./memory-index";
+import { CouncilMemoryProjector } from "./memory-projector";
 import { runCouncilMcpServer } from "./mcp-server";
 import { CouncilObservationStore } from "./observation-store";
 import { issueCouncilOwnerControl } from "./owner-control";
 import { PlaywrightCouncilChatDriver } from "./playwright-council-driver";
+import { CouncilStaleWorkMonitor } from "./stale-work-monitor";
 import { CouncilStore } from "./store";
 import { CouncilSupervisor } from "./supervisor";
 import { CouncilWakeEngine } from "./wake-engine";
@@ -41,9 +45,13 @@ export async function runCouncilMcpMain(args: string[]): Promise<void> {
   let managedRuntime: CouncilManagedRuntime | undefined;
   let managedState: ManagedAgentStateStore | undefined;
   let fallbackWake: CouncilWakeEngine | undefined;
+  let evidence: CouncilEvidenceStore | undefined;
+  let memory: CouncilMemoryIndex | undefined;
   let observations: CouncilObservationStore | undefined;
   let supervisor: CouncilSupervisor | undefined;
   let autonomy: CouncilAutonomyKernel | undefined;
+  let memoryProjector: CouncilMemoryProjector | undefined;
+  let staleMonitor: CouncilStaleWorkMonitor | undefined;
   try {
     const config = loadConfig();
     if (config.browserHost === "launcher" && config.browserHostDescriptorPath) {
@@ -58,14 +66,24 @@ export async function runCouncilMcpMain(args: string[]): Promise<void> {
         transport,
         parseAnswer: parseCouncilActionFooter,
       });
-      observations = new CouncilObservationStore(join(councilDir, "observations"));
+      evidence = new CouncilEvidenceStore(join(councilDir, "evidence"));
+      memory = new CouncilMemoryIndex(join(councilDir, "memory-index.json"));
+      observations = new CouncilObservationStore(join(councilDir, "observations"), { evidence });
       supervisor = new CouncilSupervisor({
         runtime: managedRuntime,
         council: store,
         observations,
         statePath: join(councilDir, "supervisor.json"),
       });
-      autonomy = new CouncilAutonomyKernel({ rootDir: councilDir, council: store, runtime: managedRuntime, supervisor });
+      autonomy = new CouncilAutonomyKernel({ rootDir: councilDir, council: store, runtime: managedRuntime, supervisor, memory });
+      memoryProjector = new CouncilMemoryProjector({ council: store, observations, memory, autonomy });
+      staleMonitor = new CouncilStaleWorkMonitor({
+        council: store,
+        managedAgentIds: () => new Set(managedRuntime!.supervisorAgents().map(agent => agent.id)),
+        managedStatus: agentId => managedRuntime!.managedStatus(agentId),
+        managerAgentId: () => supervisor!.status().managerAgentId,
+        enqueueEscalation: input => { autonomy!.enqueueStaleTaskEscalation(input); },
+      });
     }
     if (config.mode === "full") fallbackWake = new CouncilWakeEngine(store, config);
   } catch (error) {
@@ -80,7 +98,7 @@ export async function runCouncilMcpMain(args: string[]): Promise<void> {
         project: managedRuntime!.activeProject() ?? null,
         agents: managedRuntime!.publicAgents(),
         ...(autonomy ? { autonomy: autonomy.status() } : {}),
-      } as any),
+      }),
       owner: {
         token: () => ownerToken,
         startLead: async input => {
@@ -123,8 +141,33 @@ export async function runCouncilMcpMain(args: string[]): Promise<void> {
             history: () => supervisor!.history(),
             observation: (runId: string) => supervisor!.observation(runId),
             screenshot: (runId: string, screenshotId: string) => supervisor!.screenshot(runId, screenshotId),
-            deleteObservation: (runId: string) => supervisor!.deleteObservation(runId),
-            clearHistory: () => supervisor!.clearHistory(),
+            deleteObservation: (runId: string) => {
+              const deleted = supervisor!.deleteObservation(runId);
+              if (deleted) memoryProjector?.scan();
+              return deleted;
+            },
+            clearHistory: () => {
+              const deleted = supervisor!.clearHistory();
+              if (deleted) memoryProjector?.scan();
+              return deleted;
+            },
+            storageStats: () => observations?.evidenceStats() ?? null,
+          },
+        } : {}),
+        ...(autonomy ? {
+          autonomy: {
+            status: () => autonomy!.status(),
+            exceptional: () => autonomy!.exceptionalWork(),
+            cancelExceptional: (workItemId: string) => autonomy!.operatorCancelExceptional(workItemId),
+            retryUncertain: (workItemId: string) => autonomy!.operatorRetryUncertainAsNew(workItemId),
+          },
+        } : {}),
+        ...(memory ? {
+          memory: {
+            stats: (projectRoomId?: string) => memory!.stats(projectRoomId),
+            search: (input: { projectRoomId: string; query: string; limit: number }) => memory!.search(input),
+            recent: (input: { projectRoomId: string; limit: number }) => memory!.recent(input),
+            clearProject: (projectRoomId: string) => memory!.clearProject(projectRoomId),
           },
         } : {}),
       },
@@ -141,6 +184,8 @@ export async function runCouncilMcpMain(args: string[]): Promise<void> {
       const descriptor = issueCouncilOwnerControl(ownerDescriptorPath, ownerPort);
       ownerToken = descriptor.token;
       autonomy?.start();
+      memoryProjector?.start();
+      staleMonitor?.start();
       supervisor?.start();
     } catch (error) {
       httpServer.stop(true);
@@ -156,8 +201,11 @@ export async function runCouncilMcpMain(args: string[]): Promise<void> {
       ...(managedRuntime ? { managedRuntime } : {}),
       ...(observations ? { observations } : {}),
       ...(autonomy ? { autonomy } : {}),
+      ...(memory ? { memory } : {}),
     });
   } finally {
+    staleMonitor?.stop();
+    memoryProjector?.stop();
     supervisor?.stop();
     await autonomy?.stop().catch(() => {});
     ownerToken = undefined;

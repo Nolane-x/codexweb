@@ -25,12 +25,21 @@ const { createCouncilBrowserControlServerClass } = require("./council-control-se
 const { deriveCouncilCapabilities } = require("./council-capabilities.cjs");
 const { CouncilConnectionSupervisor } = require("./council-connection-supervisor.cjs");
 const {
+  autonomyStatus,
   bindCurrentConversationAsLead,
+  cancelExceptionalWork,
   clearObservations,
+  clearProjectMemory,
   deleteObservation,
+  listExceptionalWork,
   listObservations,
+  memoryRecent,
+  memorySearch,
+  memoryStats,
+  observationStorageStats,
   readObservation,
   readObservationScreenshot,
+  retryUncertainWork,
   runSupervisorNow,
   setSupervisorManager,
   supervisorStatus,
@@ -201,6 +210,10 @@ function councilRuntimeSnapshot() {
     capabilities: deriveCouncilCapabilities({ configured: false, runtimeLive: false }),
   };
 }
+function safeCouncilId(value, label) {
+  if (typeof value !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(value)) throw new Error(`${label} is invalid`);
+  return value;
+}
 
 function registerIpc({ logger, stateStore }) {
   const handle = (channel, handler) => registerLoggedIpc(ipcMain, logger, channel, handler);
@@ -258,10 +271,19 @@ function registerIpc({ logger, stateStore }) {
   });
   handle("launcher:council-supervisor-run", () => runSupervisorNow());
   handle("launcher:council-observations-list", () => listObservations());
-  handle("launcher:council-observation-read", (_event, runId) => readObservation(runId));
-  handle("launcher:council-observation-screenshot", (_event, runId, screenshotId) => readObservationScreenshot(runId, screenshotId));
-  handle("launcher:council-observation-delete", (_event, runId) => deleteObservation(runId));
+  handle("launcher:council-observation-storage", () => observationStorageStats());
+  handle("launcher:council-observation-read", (_event, runId) => readObservation(safeCouncilId(runId, "runId")));
+  handle("launcher:council-observation-screenshot", (_event, runId, screenshotId) => readObservationScreenshot(safeCouncilId(runId, "runId"), screenshotId));
+  handle("launcher:council-observation-delete", (_event, runId) => deleteObservation(safeCouncilId(runId, "runId")));
   handle("launcher:council-observations-clear", () => clearObservations());
+  handle("launcher:council-autonomy-status", () => autonomyStatus());
+  handle("launcher:council-autonomy-exceptional", () => listExceptionalWork());
+  handle("launcher:council-autonomy-cancel", (_event, workItemId) => cancelExceptionalWork(safeCouncilId(workItemId, "workItemId")));
+  handle("launcher:council-autonomy-retry-uncertain", (_event, workItemId) => retryUncertainWork(safeCouncilId(workItemId, "workItemId")));
+  handle("launcher:council-memory-stats", (_event, roomId) => memoryStats(roomId === null || roomId === undefined ? null : safeCouncilId(roomId, "roomId")));
+  handle("launcher:council-memory-search", (_event, roomId, query, limit) => memorySearch(safeCouncilId(roomId, "roomId"), query, limit));
+  handle("launcher:council-memory-recent", (_event, roomId, limit) => memoryRecent(safeCouncilId(roomId, "roomId"), limit));
+  handle("launcher:council-memory-clear-project", (_event, roomId) => clearProjectMemory(safeCouncilId(roomId, "roomId")));
   handle("launcher:set-mcp-step", (_event, step) => { if (!Number.isInteger(step) || step < 0 || step > 2) throw new Error("Invalid MCP guide step"); return stateStore.update({ mcpGuideStep: step }); });
   handle("launcher:autostart", (_event, enabled) => { const desired = enabled === true; const autostart = setAutostart(app, desired); return { state: stateStore.update({ autoStart: desired }), ...autostart }; });
   handle("launcher:set-preference", (_event, key, value) => { if (key !== "keepRunningOnClose" && key !== "showBrowserDuringTurns") throw new Error("Unknown preference"); return stateStore.update({ [key]: value === true }); });

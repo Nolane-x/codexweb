@@ -35,6 +35,18 @@ function assertConversationUrl(raw) {
   return url.toString();
 }
 
+function assertId(value, label) {
+  const text = String(value ?? "").trim();
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(text)) throw new Error(`${label} is invalid`);
+  return text;
+}
+
+function safeLimit(value, fallback, max) {
+  if (value === undefined || value === null) return fallback;
+  if (!Number.isInteger(value) || value < 1) throw new Error("limit is invalid");
+  return Math.min(max, value);
+}
+
 async function ownerRequest(operation, body = {}, options = {}) {
   if (typeof operation !== "string" || !/^[a-z0-9/-]+$/.test(operation) || operation.includes("..")) throw new Error("Council owner operation is invalid");
   const { endpoint, token } = readOwnerDescriptor();
@@ -77,27 +89,57 @@ async function supervisorStatus(options = {}) { return await ownerRequest("super
 async function setSupervisorManager(agentId, options = {}) { return await ownerRequest("supervisor/manager", { agent_id: agentId || null }, options); }
 async function runSupervisorNow(options = {}) { return await ownerRequest("supervisor/run", {}, { ...options, timeoutMs: options.timeoutMs ?? OWNER_LONG_REQUEST_TIMEOUT_MS }); }
 async function listObservations(options = {}) { return await ownerRequest("observations/list", {}, options); }
-async function readObservation(runId, options = {}) { return await ownerRequest("observations/read", { run_id: runId }, options); }
-async function deleteObservation(runId, options = {}) { return await ownerRequest("observations/delete", { run_id: runId }, options); }
+async function observationStorageStats(options = {}) { return await ownerRequest("observations/storage", {}, options); }
+async function readObservation(runId, options = {}) { return await ownerRequest("observations/read", { run_id: assertId(runId, "runId") }, options); }
+async function deleteObservation(runId, options = {}) { return await ownerRequest("observations/delete", { run_id: assertId(runId, "runId") }, options); }
 async function clearObservations(options = {}) { return await ownerRequest("observations/clear", {}, options); }
 async function readObservationScreenshot(runId, screenshotId, options = {}) {
-  const buffer = await ownerRequest("observations/screenshot", { run_id: runId, screenshot_id: screenshotId }, { ...options, binary: true });
+  const buffer = await ownerRequest("observations/screenshot", { run_id: assertId(runId, "runId"), screenshot_id: String(screenshotId || "") }, { ...options, binary: true });
   return `data:image/png;base64,${buffer.toString("base64")}`;
+}
+
+async function autonomyStatus(options = {}) { return await ownerRequest("autonomy/status", {}, options); }
+async function listExceptionalWork(options = {}) { return await ownerRequest("autonomy/exceptional", {}, options); }
+async function cancelExceptionalWork(workItemId, options = {}) { return await ownerRequest("autonomy/cancel", { work_item_id: assertId(workItemId, "workItemId") }, options); }
+async function retryUncertainWork(workItemId, options = {}) { return await ownerRequest("autonomy/retry-uncertain", { work_item_id: assertId(workItemId, "workItemId") }, options); }
+
+async function memoryStats(roomId, options = {}) {
+  return await ownerRequest("memory/stats", roomId ? { room_id: assertId(roomId, "roomId") } : {}, options);
+}
+async function memorySearch(roomId, query, limit = 20, options = {}) {
+  const text = String(query ?? "").trim();
+  if (text.length < 2 || text.length > 500) throw new Error("memory query is invalid");
+  return await ownerRequest("memory/search", { room_id: assertId(roomId, "roomId"), query: text, limit: safeLimit(limit, 20, 50) }, options);
+}
+async function memoryRecent(roomId, limit = 30, options = {}) {
+  return await ownerRequest("memory/recent", { room_id: assertId(roomId, "roomId"), limit: safeLimit(limit, 30, 100) }, options);
+}
+async function clearProjectMemory(roomId, options = {}) {
+  return await ownerRequest("memory/clear-project", { room_id: assertId(roomId, "roomId") }, options);
 }
 
 module.exports = {
   OWNER_REQUEST_TIMEOUT_MS,
   OWNER_LONG_REQUEST_TIMEOUT_MS,
   assertConversationUrl,
+  autonomyStatus,
   bindCurrentConversationAsLead,
+  cancelExceptionalWork,
   clearObservations,
+  clearProjectMemory,
   deleteObservation,
+  listExceptionalWork,
   listObservations,
+  memoryRecent,
+  memorySearch,
+  memoryStats,
+  observationStorageStats,
   ownerDescriptorPath,
   ownerRequest,
   readObservation,
   readObservationScreenshot,
   readOwnerDescriptor,
+  retryUncertainWork,
   runSupervisorNow,
   setSupervisorManager,
   supervisorStatus,

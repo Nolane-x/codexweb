@@ -21,7 +21,7 @@ describe("CouncilAgentHealthLedger", () => {
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 
-  test("signed-out and uncertain agents remain blocked until success/operator evidence", () => {
+  test("signed-out and uncertain agents stay blocked until strong/operator evidence", () => {
     const root = mkdtempSync(join(tmpdir(), "council-health-open-"));
     try {
       const ledger = new CouncilAgentHealthLedger(join(root, "health.json"));
@@ -30,6 +30,17 @@ describe("CouncilAgentHealthLedger", () => {
       expect(ledger.canAttempt("a").allowed).toBe(false);
       expect(ledger.canAttempt("b").allowed).toBe(false);
       expect(ledger.get("b")?.state).toBe("quarantined");
+
+      ledger.observeSupervisor("a", "healthy", "weak supervisor observation");
+      ledger.observeSuccess("b", "browser");
+      expect(ledger.get("a")?.state).toBe("signed-out");
+      expect(ledger.get("b")?.state).toBe("quarantined");
+      expect(ledger.canAttempt("b").allowed).toBe(false);
+
+      ledger.clearQuarantine("b", "operator reviewed target conversation");
+      expect(ledger.get("b")?.state).toBe("healthy");
+      expect(ledger.canAttempt("b").allowed).toBe(true);
+      expect(ledger.get("b")?.evidence.at(-1)?.source).toBe("operator");
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 
@@ -48,6 +59,20 @@ describe("CouncilAgentHealthLedger", () => {
       ledger.observeSleeping("bob", "presence");
       expect(ledger.get("bob")!.consecutiveFailures).toBe(failures);
       expect(ledger.get("bob")!.evidence.length).toBeLessThanOrEqual(20);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  test("flags repeated healthy/failure oscillation as flapping and persists it", () => {
+    const root = mkdtempSync(join(tmpdir(), "council-health-flap-"));
+    try {
+      const path = join(root, "health.json");
+      const ledger = new CouncilAgentHealthLedger(path);
+      for (let index = 0; index < 3; index += 1) {
+        ledger.observeSuccess("bob", "browser");
+        ledger.observeFailure("bob", "CONNECTION_FAILED", "network", "dispatcher");
+      }
+      expect(ledger.get("bob")?.flapping).toBe(true);
+      expect(new CouncilAgentHealthLedger(path).get("bob")?.flapping).toBe(true);
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 });

@@ -1,10 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { COUNCIL_MCP_SERVER_NAME, COUNCIL_TOOL_NAMES } from "../src/council/mcp-server";
+import { COUNCIL_MCP_SERVER_NAME, COUNCIL_MCP_SERVER_VERSION, COUNCIL_TOOL_NAMES } from "../src/council/mcp-server";
 import { actorSchema } from "../src/council/mcp-shared";
 
 describe("Council MCP contract", () => {
-  test("exposes collaboration, managed-agent, repo-binding, decision, task, wake, continuity, observation and autonomy tools", () => {
+  test("exposes collaboration, managed-agent, repo-binding, continuity, observation, autonomy and memory tools", () => {
     expect(COUNCIL_MCP_SERVER_NAME).toBe("codexweb-council");
+    expect(COUNCIL_MCP_SERVER_VERSION).toBe("1.5.0");
     for (const name of [
       "council_join",
       "council_say",
@@ -22,9 +23,15 @@ describe("Council MCP contract", () => {
       "council_observation_read",
       "council_autonomy_status",
       "council_autonomy_audit",
+      "council_memory_search",
+      "council_memory_recent",
     ]) expect(COUNCIL_TOOL_NAMES).toContain(name as never);
+    expect(new Set(COUNCIL_TOOL_NAMES).size).toBe(COUNCIL_TOOL_NAMES.length);
   });
-  test("does not expose legacy Codex broker tools", () => { expect(COUNCIL_TOOL_NAMES.some(name => name.startsWith("codex_"))).toBe(false); });
+  test("does not expose legacy Codex broker or operator mutation tools", () => {
+    expect(COUNCIL_TOOL_NAMES.some(name => name.startsWith("codex_"))).toBe(false);
+    expect(COUNCIL_TOOL_NAMES.some(name => /retry|cancel|clear_memory/i.test(name))).toBe(false);
+  });
   test("requires explicit actor identity and private capability on every non-join Council call", () => {
     expect(actorSchema.agent_id.safeParse(undefined).success).toBe(false);
     expect(actorSchema.agent_id.safeParse("alice").success).toBe(true);
