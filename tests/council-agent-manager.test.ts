@@ -9,6 +9,7 @@ class FakeCouncil {
   state: any = { version: 1, agents: [], credentials: [], rooms: [{ id: "core", name: "Core", mission: "Build", createdAt: "", updatedAt: "" }], messages: [], tasks: [], decisions: [], wakes: [], checkpoints: [] };
   wakeTransitions: string[] = [];
   presenceTouches: string[] = [];
+  failWakeStatus?: string;
   snapshot() { return structuredClone(this.state); }
   transaction<T>(work: (store: FakeCouncil) => T): T { const before = structuredClone(this.state); try { return work(this); } catch (error) { this.state = before; throw error; } }
   joinAgent(input: any) { if (!this.state.agents.some((agent: any) => agent.id === input.id)) this.state.agents.push({ ...input, joinedAt: "", updatedAt: "" }); return { agent: input, agentToken: "x", credentialIssued: true }; }
@@ -34,6 +35,7 @@ class FakeCouncil {
     return wake;
   }
   updateWake(id: string, status: string, lastError?: string) {
+    if (status === this.failWakeStatus) throw new Error(`forced wake transition failure: ${status}`);
     const wake = this.state.wakes.find((candidate: any) => candidate.id === id);
     wake.status = status;
     this.wakeTransitions.push(status);
@@ -93,6 +95,28 @@ describe("CouncilAgentManager", () => {
       expect(council.wakeTransitions).toEqual(["dispatched", "target-running", "replied"]);
       expect(council.state.wakes[0].status).toBe("replied");
       expect(council.presenceTouches).toContain("bob");
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  test("running transition failure still releases the leased browser surface", async () => {
+    const root = mkdtempSync(join(tmpdir(), "manager-"));
+    try {
+      const managed = new ManagedAgentStateStore(join(root, "agents.json"));
+      const council = new FakeCouncil();
+      council.failWakeStatus = "target-running";
+      const registry = new FakeRegistry();
+      const calls: any[] = [];
+      const transport = { async run() { throw new Error("transport must not run after transition failure"); }, async release(id: string) { calls.push({ release: id }); return true; } };
+      const manager = new CouncilAgentManager({ council: council as any, managed, registry: registry as any, transport: transport as any, parseAnswer: (() => null) as any, projectMission: "Build", defaultRoomId: "core" });
+      manager.registerLead({ id: "alice", name: "Alice", role: "Lead", mandate: "Lead", permissions: ["wake"] });
+      manager.registerLead({ id: "bob", name: "Bob", role: "Critic", mandate: "Attack", permissions: ["wake", "review"] });
+      managed.bindConversation("bob", "https://chatgpt.com/c/bob");
+
+      await expect(manager.wakeAgent("alice", "bob", "core", "Review this")).rejects.toThrow(/target-running/);
+
+      expect(calls).toEqual([{ release: "bob" }]);
+      expect(registry.get("bob")?.status).toBe("sleeping");
+      expect(council.state.wakes[0].status).toBe("failed");
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 
