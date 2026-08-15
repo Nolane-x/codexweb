@@ -50,6 +50,28 @@ function configuredBaseUrl() {
   return `http://127.0.0.1:${port}`;
 }
 
+function normalizePresence(state) {
+  if (state.presence === undefined) return { ...state, presence: [] };
+  if (!Array.isArray(state.presence)) throw new Error("Council sync snapshot presence is invalid");
+  const seen = new Set();
+  for (const entry of state.presence) {
+    if (!entry || typeof entry !== "object" || typeof entry.agentId !== "string" || !entry.agentId) {
+      throw new Error("Council sync snapshot presence entry is invalid");
+    }
+    if (seen.has(entry.agentId)) throw new Error("Council sync snapshot presence contains duplicate agent ids");
+    seen.add(entry.agentId);
+    if (entry.freshness === "unknown") continue;
+    if (entry.freshness !== "fresh" && entry.freshness !== "stale") throw new Error("Council sync snapshot presence freshness is invalid");
+    if (typeof entry.lastSeenAt !== "string" || !Number.isFinite(Date.parse(entry.lastSeenAt))) {
+      throw new Error("Council sync snapshot presence lastSeenAt is invalid");
+    }
+    if (typeof entry.leaseExpiresAt !== "string" || !Number.isFinite(Date.parse(entry.leaseExpiresAt))) {
+      throw new Error("Council sync snapshot presence leaseExpiresAt is invalid");
+    }
+  }
+  return state;
+}
+
 function validateSnapshotEnvelope(value) {
   if (!value || typeof value !== "object" || value.schemaVersion !== 1 || typeof value.cursor !== "string" || !value.cursor || typeof value.generatedAt !== "string") {
     throw new Error("Council sync snapshot envelope is invalid");
@@ -58,7 +80,9 @@ function validateSnapshotEnvelope(value) {
   if (!state || typeof state !== "object" || state.version !== 1 || !Array.isArray(state.agents) || !Array.isArray(state.rooms) || !Array.isArray(state.messages) || !Array.isArray(state.decisions) || !Array.isArray(state.tasks) || !Array.isArray(state.wakes)) {
     throw new Error("Council sync snapshot state is invalid");
   }
-  return value;
+  const normalizedState = normalizePresence(state);
+  if (normalizedState === state) return value;
+  return { ...value, state: normalizedState };
 }
 
 async function fetchWithDeadline(fetchImpl, url, options = {}, timeoutMs = DEFAULT_REQUEST_TIMEOUT_MS) {
