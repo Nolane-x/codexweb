@@ -331,7 +331,7 @@ export class CouncilObservationStore {
   }
 
   private archiveBytes(): number {
-    let total = existsSync(this.indexPath) ? statSync(this.indexPath).size : 0;
+    let total = (existsSync(this.indexPath) ? statSync(this.indexPath).size : 0) + (this.evidence?.stats().bytes ?? 0);
     if (!existsSync(this.screenshotRoot)) return total;
     for (const run of readdirSync(this.screenshotRoot, { withFileTypes: true })) {
       if (!run.isDirectory() || !RUN_ID.test(run.name)) continue;
