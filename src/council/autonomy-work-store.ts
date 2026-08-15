@@ -20,6 +20,7 @@ export interface AutonomyWorkItem {
   state: AutonomyWorkState;
   attempt: number;
   maxAttempts: number;
+  correlationDepth: number;
   notBefore: string;
   leaseOwner?: string;
   leaseExpiresAt?: string;
@@ -43,6 +44,7 @@ export interface EnqueueAutonomyWorkInput {
   dedupeKey: string;
   priority?: number;
   maxAttempts?: number;
+  correlationDepth?: number;
   notBefore?: string;
   correlationId?: string;
   reason?: string;
@@ -99,7 +101,8 @@ export class CouncilAutonomyWorkStore {
 
   active(dedupeKey: string): AutonomyWorkItem | undefined {
     const key = dedupeKey.trim();
-    return clone(this.state.items.find(item => item.dedupeKey === key && !TERMINAL.has(item.state)));
+    const item = this.state.items.find(candidate => candidate.dedupeKey === key && !TERMINAL.has(candidate.state));
+    return item ? clone(item) : undefined;
   }
 
   enqueue(input: EnqueueAutonomyWorkInput): AutonomyWorkItem {
@@ -110,30 +113,37 @@ export class CouncilAutonomyWorkStore {
     if (existing) {
       existing.priority = Math.max(existing.priority, boundedInteger(input.priority, existing.priority, 0, 100));
       existing.maxAttempts = Math.max(existing.maxAttempts, boundedInteger(input.maxAttempts, existing.maxAttempts, 1, 20));
+      existing.correlationDepth = Math.min(existing.correlationDepth, boundedInteger(input.correlationDepth, existing.correlationDepth, 0, 64));
       const reason = safeText(input.reason, 300);
       if (reason && !existing.reasons.includes(reason)) existing.reasons = [...existing.reasons, reason].slice(-8);
       existing.updatedAt = now;
       this.persistMutation();
       return clone(existing);
     }
+    const targetAgentId = safeId(input.targetAgentId, "targetAgentId", 128);
+    const sourceAgentId = safeId(input.sourceAgentId, "sourceAgentId", 128);
+    const taskId = safeId(input.taskId, "taskId", 128);
+    const wakeId = safeId(input.wakeId, "wakeId", 128);
+    const reason = safeText(input.reason, 300);
     const item: AutonomyWorkItem = {
       id: `work_${randomUUID().replaceAll("-", "")}`,
       kind: input.kind,
       projectRoomId: safeId(input.projectRoomId, "projectRoomId", 128)!,
-      ...(safeId(input.targetAgentId, "targetAgentId", 128) ? { targetAgentId: safeId(input.targetAgentId, "targetAgentId", 128)! } : {}),
-      ...(safeId(input.sourceAgentId, "sourceAgentId", 128) ? { sourceAgentId: safeId(input.sourceAgentId, "sourceAgentId", 128)! } : {}),
-      ...(safeId(input.taskId, "taskId", 128) ? { taskId: safeId(input.taskId, "taskId", 128)! } : {}),
-      ...(safeId(input.wakeId, "wakeId", 128) ? { wakeId: safeId(input.wakeId, "wakeId", 128)! } : {}),
+      ...(targetAgentId ? { targetAgentId } : {}),
+      ...(sourceAgentId ? { sourceAgentId } : {}),
+      ...(taskId ? { taskId } : {}),
+      ...(wakeId ? { wakeId } : {}),
       dedupeKey,
       priority: boundedInteger(input.priority, 50, 0, 100),
       state: "queued",
       attempt: 0,
       maxAttempts: boundedInteger(input.maxAttempts, 4, 1, 20),
+      correlationDepth: boundedInteger(input.correlationDepth, 0, 0, 64),
       notBefore: safeDate(input.notBefore, now),
       createdAt: now,
       updatedAt: now,
       correlationId: safeId(input.correlationId, "correlationId", 160) ?? `corr_${randomUUID().replaceAll("-", "")}`,
-      reasons: safeText(input.reason, 300) ? [safeText(input.reason, 300)!] : [],
+      reasons: reason ? [reason] : [],
     };
     this.state.items.push(item);
     this.persistMutation();
@@ -183,6 +193,18 @@ export class CouncilAutonomyWorkStore {
     return this.withLease(id, owner, item => {
       item.state = "retry-wait";
       item.notBefore = safeDate(input.notBefore, this.isoNow());
+      if (input.code) item.failureCode = input.code;
+      const message = safeText(input.message, 500);
+      if (message) item.failureMessage = message;
+      this.clearLease(item);
+    });
+  }
+
+  defer(id: string, owner: string, input: { notBefore: string; code?: CouncilFailureCode; message?: string }): AutonomyWorkItem {
+    return this.withLease(id, owner, item => {
+      item.state = "retry-wait";
+      item.notBefore = safeDate(input.notBefore, this.isoNow());
+      item.attempt = Math.max(0, item.attempt - 1);
       if (input.code) item.failureCode = input.code;
       const message = safeText(input.message, 500);
       if (message) item.failureMessage = message;
@@ -292,6 +314,10 @@ export class CouncilAutonomyWorkStore {
       if (parsed.version !== 1 || !Number.isSafeInteger(parsed.revision) || parsed.revision < 0 || !Array.isArray(parsed.items)) throw new Error("invalid autonomy work state header");
       for (const item of parsed.items) {
         if (!item || typeof item !== "object" || typeof item.id !== "string" || typeof item.kind !== "string" || typeof item.dedupeKey !== "string" || typeof item.state !== "string") throw new Error("invalid autonomy work item");
+        item.correlationDepth = boundedInteger(item.correlationDepth, 0, 0, 64);
+        item.attempt = boundedInteger(item.attempt, 0, 0, 20);
+        item.maxAttempts = boundedInteger(item.maxAttempts, 4, 1, 20);
+        item.reasons = Array.isArray(item.reasons) ? item.reasons.map(reason => safeText(String(reason), 300)).filter((reason): reason is string => Boolean(reason)).slice(-8) : [];
       }
       return parsed;
     } catch (error) {
