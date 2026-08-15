@@ -234,7 +234,7 @@ export function startCouncilHttpServer(
               if (!/^[A-Za-z0-9._-]{8,160}\.png$/.test(screenshotId)) throw new Error("screenshot_id is invalid");
               const png = supervisor.screenshot(runId, screenshotId);
               if (!png) return ownerJson("Observation screenshot does not exist", 404);
-              return new Response(png, { status: 200, headers: responseHeaders(undefined, "image/png") });
+              return new Response(Uint8Array.from(png), { status: 200, headers: responseHeaders(undefined, "image/png") });
             }
             if (url.pathname === "/api/owner/observations/delete") return ownerJson({ deleted: supervisor.deleteObservation(ownerId(body, "run_id")) });
             if (url.pathname === "/api/owner/observations/clear") return ownerJson({ deleted: supervisor.clearHistory() });
