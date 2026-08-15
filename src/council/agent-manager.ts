@@ -7,6 +7,8 @@ import { assertBrowserActionPermission } from "./policy";
 import { buildAgentBootstrapPrompt, buildAgentResurrectionPrompt } from "./resurrection";
 import type { CouncilState, CouncilWakeEvent } from "./types";
 
+const MANAGED_PRESENCE_HEARTBEAT_MS = 20_000;
+
 interface CouncilStoreLike {
   snapshot(): CouncilState;
   transaction<T>(work: (store: CouncilStoreLike) => T): T;
@@ -175,6 +177,11 @@ export class CouncilAgentManager {
     const lease = this.registry.lease(agentId);
     if (lease.status === "queued") throw new Error(`Council agent ${agentId} is queued because all browser surfaces are busy`);
     this.council.touchAgentPresence(agentId);
+    const presenceHeartbeat = setInterval(() => {
+      try { this.council.touchAgentPresence(agentId); }
+      catch { /* Presence is observability; heartbeat failure must not abort the active browser turn. */ }
+    }, MANAGED_PRESENCE_HEARTBEAT_MS);
+    presenceHeartbeat.unref?.();
     onRunning?.();
     let effects: DeferredEffect[] = [];
     try {
@@ -202,6 +209,7 @@ export class CouncilAgentManager {
       effects = this.applyActions(agentId, parsed, roomId);
       this.council.touchAgentPresence(agentId);
     } finally {
+      clearInterval(presenceHeartbeat);
       await this.transport.release(agentId).catch(() => false);
       this.registry.release(agentId);
     }
