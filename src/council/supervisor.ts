@@ -7,6 +7,7 @@ import type { CouncilObservationAgentRecord, CouncilObservationHealth, CouncilOb
 import type { CouncilStore } from "./store";
 
 export const COUNCIL_SUPERVISOR_INTERVAL_MS = 20 * 60 * 1_000;
+export const COUNCIL_SUPERVISOR_INITIAL_DELAY_MS = 5_000;
 const MAX_MANAGER_SCREENSHOTS = 20;
 
 interface SupervisorStateFile { version: 1; managerAgentId?: string; updatedAt: string }
@@ -113,7 +114,7 @@ export class CouncilSupervisor {
 
   start(): void {
     this.stopped = false;
-    if (this.managerAgentId) this.schedule(this.intervalMs);
+    if (this.managerAgentId) this.schedule(COUNCIL_SUPERVISOR_INITIAL_DELAY_MS);
   }
 
   stop(): void {
@@ -146,7 +147,7 @@ export class CouncilSupervisor {
     this.nextRunAt = undefined;
     if (next) {
       this.stopped = false;
-      this.schedule(this.intervalMs);
+      this.schedule(COUNCIL_SUPERVISOR_INITIAL_DELAY_MS);
     }
     return this.status();
   }
