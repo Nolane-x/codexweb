@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { CouncilExecutionPhase } from "./autonomy-errors";
+import type { CouncilExecutionPhase, CouncilFailureCode } from "./autonomy-errors";
 import { boundedFailureMessage, classifyCouncilFailure, councilPhaseReached } from "./autonomy-errors";
 import type { CouncilAutonomyAuditStore } from "./autonomy-audit";
 import type { CouncilAutonomyBudgetLedger } from "./autonomy-policy";
@@ -16,6 +16,7 @@ export interface CouncilAutonomyDispatcherOptions {
   health: CouncilAgentHealthLedger;
   budget: CouncilAutonomyBudgetLedger;
   execute: (item: AutonomyWorkItem, hooks: CouncilAutonomyExecutionHooks) => Promise<void>;
+  onEscalationNeeded?: (item: AutonomyWorkItem, code: CouncilFailureCode, reason: string) => void | Promise<void>;
   now?: () => number;
   random?: () => number;
   leaseMs?: number;
@@ -40,6 +41,7 @@ export class CouncilAutonomyDispatcher {
   private readonly health: CouncilAgentHealthLedger;
   private readonly budget: CouncilAutonomyBudgetLedger;
   private readonly executeWork: CouncilAutonomyDispatcherOptions["execute"];
+  private readonly onEscalationNeeded?: CouncilAutonomyDispatcherOptions["onEscalationNeeded"];
   private readonly now: () => number;
   private readonly random: () => number;
   private readonly leaseMs: number;
@@ -58,6 +60,7 @@ export class CouncilAutonomyDispatcher {
     this.health = options.health;
     this.budget = options.budget;
     this.executeWork = options.execute;
+    this.onEscalationNeeded = options.onEscalationNeeded;
     this.now = options.now ?? Date.now;
     this.random = options.random ?? Math.random;
     this.leaseMs = Math.max(5_000, options.leaseMs ?? 30_000);
@@ -136,12 +139,15 @@ export class CouncilAutonomyDispatcher {
 
     const healthGate = leased.targetAgentId ? this.health.canAttempt(leased.targetAgentId) : { allowed: true as const };
     if (!healthGate.allowed) {
+      const code = healthGate.reasonCode ?? "UNKNOWN";
       if (healthGate.retryAt) {
-        this.work.retry(leased.id, this.owner, { notBefore: healthGate.retryAt, code: healthGate.reasonCode, message: "target agent circuit breaker cooldown is active" });
-        this.auditEvent(leased, "policy-blocked", healthGate.reasonCode, "target agent circuit breaker cooldown is active");
+        this.work.retry(leased.id, this.owner, { notBefore: healthGate.retryAt, code, message: "target agent circuit breaker cooldown is active" });
+        this.auditEvent(leased, "policy-blocked", code, "target agent circuit breaker cooldown is active");
+        if (code === "CHATGPT_LIMITED" || code === "RESPONSE_STALLED") this.escalate(leased, code, "target agent circuit breaker cooldown is active");
       } else {
-        this.work.fail(leased.id, this.owner, healthGate.reasonCode ?? "UNKNOWN", "target agent circuit breaker is open");
-        this.auditEvent(leased, "policy-blocked", healthGate.reasonCode, "target agent circuit breaker is open");
+        this.work.fail(leased.id, this.owner, code, "target agent circuit breaker is open");
+        this.auditEvent(leased, "policy-blocked", code, "target agent circuit breaker is open");
+        this.escalate(leased, code, "target agent circuit breaker is open");
       }
       this.activeWorkItemId = null;
       return true;
@@ -159,8 +165,10 @@ export class CouncilAutonomyDispatcher {
       createdAt: leased.createdAt,
     });
     if (!decision.allowed) {
-      this.work.fail(leased.id, this.owner, decision.code ?? "POLICY_BUDGET_EXHAUSTED", decision.reason);
-      this.auditEvent(leased, "policy-blocked", decision.code, decision.reason);
+      const code = decision.code ?? "POLICY_BUDGET_EXHAUSTED";
+      this.work.fail(leased.id, this.owner, code, decision.reason);
+      this.auditEvent(leased, "policy-blocked", code, decision.reason);
+      this.escalate(leased, code, decision.reason ?? "autonomy policy blocked work");
       this.activeWorkItemId = null;
       return true;
     }
@@ -194,6 +202,7 @@ export class CouncilAutonomyDispatcher {
         this.work.uncertain(leased.id, this.owner, message);
         if (leased.targetAgentId) this.health.observeFailure(leased.targetAgentId, "SUBMISSION_UNCERTAIN", message, "dispatcher");
         this.auditEvent(leased, "uncertain", "SUBMISSION_UNCERTAIN", message);
+        this.escalate(leased, "SUBMISSION_UNCERTAIN", message);
       } else if (classification.retryableBeforeSubmit && leased.attempt < leased.maxAttempts) {
         const exponential = Math.min(60_000, 1_000 * (2 ** Math.max(0, leased.attempt - 1)));
         const jitter = Math.floor(exponential * 0.1 * Math.max(0, Math.min(1, this.random())));
@@ -209,6 +218,9 @@ export class CouncilAutonomyDispatcher {
         this.work.fail(leased.id, this.owner, classification.code, message);
         if (leased.targetAgentId) this.health.observeFailure(leased.targetAgentId, classification.code, message, "dispatcher");
         this.auditEvent(leased, "failed", classification.code, message);
+        if (classification.code === "CHATGPT_LIMITED" || classification.code === "CHATGPT_SIGNED_OUT" || classification.code === "RESPONSE_STALLED" || classification.code === "CONVERSATION_UNAVAILABLE") {
+          this.escalate(leased, classification.code, message);
+        }
       }
     } finally {
       clearInterval(heartbeat);
@@ -230,6 +242,11 @@ export class CouncilAutonomyDispatcher {
         this.wakeResolver = finish;
       });
     }
+  }
+
+  private escalate(item: AutonomyWorkItem, code: CouncilFailureCode, reason: string): void {
+    if (!this.onEscalationNeeded || item.kind === "escalation") return;
+    void Promise.resolve(this.onEscalationNeeded(item, code, reason)).catch(() => {});
   }
 
   private recordBudget(item: AutonomyWorkItem): void {
