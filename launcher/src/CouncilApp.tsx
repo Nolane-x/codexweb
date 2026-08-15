@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useLayoutEffect, useState } from "react";
-import type { BrowserState, LauncherSnapshot, LogRecord } from "./types";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useState } from "react";
+import type { BrowserState, CouncilRuntimeViewState, LauncherSnapshot, LogRecord, ManagedAgentView } from "./types";
 import "./council-shell.css";
 
 const api = window.codexWebLauncher;
@@ -7,9 +7,15 @@ type View = "chatgpt" | "activity" | "settings";
 
 function messageOf(error: unknown): string { return error instanceof Error ? error.message : String(error); }
 
+function managedAgents(runtime: CouncilRuntimeViewState | null): ManagedAgentView[] {
+  if (runtime?.projection.syncState !== "live" && runtime?.projection.syncState !== "stale") return [];
+  return runtime.projection.state.managed?.agents ?? [];
+}
+
 export function CouncilApp() {
   const [snapshot, setSnapshot] = useState<LauncherSnapshot | null>(null);
   const [browser, setBrowser] = useState<BrowserState | null>(null);
+  const [councilRuntime, setCouncilRuntime] = useState<CouncilRuntimeViewState | null>(null);
   const [view, setView] = useState<View>("chatgpt");
   const [slot, setSlot] = useState<HTMLDivElement | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -22,11 +28,13 @@ export function CouncilApp() {
       if (disposed) return;
       setSnapshot(value);
       setBrowser(value.browser);
+      setCouncilRuntime(value.councilRuntime);
     }).catch(error => setError(messageOf(error)));
     const offBrowser = api.onBrowserState(setBrowser);
+    const offCouncil = api.onCouncilRuntime(setCouncilRuntime);
     const offState = api.onStateChanged(state => setSnapshot(current => current ? { ...current, state } : current));
     const offUpdate = api.onUpdateState(update => setSnapshot(current => current ? { ...current, update } : current));
-    return () => { disposed = true; offBrowser(); offState(); offUpdate(); };
+    return () => { disposed = true; offBrowser(); offCouncil(); offState(); offUpdate(); };
   }, []);
 
   useLayoutEffect(() => {
@@ -61,6 +69,10 @@ export function CouncilApp() {
     catch (error) { setError(messageOf(error)); }
     finally { setBusy(false); }
   }, [busy]);
+
+  const agents = useMemo(() => managedAgents(councilRuntime), [councilRuntime]);
+  const tabByAgent = useMemo(() => new Map((browser?.tabs ?? []).filter(tab => tab.agentId).map(tab => [tab.agentId!, tab])), [browser]);
+  const otherTabs = useMemo(() => (browser?.tabs ?? []).filter(tab => tab.id !== "home" && !tab.agentId), [browser]);
 
   if (!api) return <div className="council-fatal">Launcher IPC is unavailable.</div>;
   if (!snapshot) return <div className="council-loading"><span>◌</span><strong>Starting CodexWeb Council…</strong></div>;
@@ -107,7 +119,7 @@ export function CouncilApp() {
         <div className="council-sidebar-health">
           <div><span>Browser</span><strong>{authenticated ? "Ready" : browser?.status ?? "Starting"}</strong></div>
           <div><span>Tunnel</span><strong>{snapshot.mcpCredentialsConfigured ? "Configured" : "Optional"}</strong></div>
-          <div><span>Agents</span><strong>{browser?.tabs.filter(tab => tab.agentId).length ?? 0}/5 active</strong></div>
+          <div><span>Agents</span><strong>{agents.length || browser?.tabs.filter(tab => tab.agentId).length || 0} project</strong></div>
         </div>
       </aside>
 
@@ -128,12 +140,18 @@ export function CouncilApp() {
                 <button onClick={() => void run(() => api.zoomBrowser("in"))}>+</button>
               </div>
             </div>
-            {(browser?.tabs.length ?? 0) > 0 ? (
-              <div className="council-tabstrip">
-                <button className={browser?.activeTabId === "home" ? "active" : ""} onClick={() => void run(() => api.selectBrowserTab("home"))}>Project chat</button>
-                {browser?.tabs.map(tab => <button key={tab.id} className={tab.active ? "active" : ""} onClick={() => void run(() => api.selectBrowserTab(tab.id))}>{tab.agentId ? `AI · ${tab.agentId}` : tab.title}</button>)}
-              </div>
-            ) : null}
+            <div className="council-tabstrip council-project-tabstrip" aria-label="Project ChatGPT agents">
+              <button className={browser?.activeTabId === "home" ? "active" : ""} onClick={() => void run(() => api.selectBrowserTab("home"))}><i className="tab-home" /><span>Project chat</span></button>
+              {agents.map(agent => {
+                const tab = tabByAgent.get(agent.id);
+                return (
+                  <button key={agent.id} className={`${tab?.active ? "active" : ""}${tab ? "" : " parked"}`} disabled={!tab || busy} title={tab ? `Open ${agent.name}` : `${agent.name} is ${agent.runtimeStatus}; its persistent conversation is saved and will reopen when called`} onClick={() => tab ? void run(() => api.selectBrowserTab(tab.id)) : undefined}>
+                    <i className={`tab-agent runtime-${agent.runtimeStatus}`} /><span>{agent.name}</span><small>{agent.runtimeStatus}</small>
+                  </button>
+                );
+              })}
+              {otherTabs.map(tab => <button key={tab.id} className={tab.active ? "active" : ""} onClick={() => void run(() => api.selectBrowserTab(tab.id))}><i /><span>{tab.title}</span></button>)}
+            </div>
             <div className="council-browser-slot" ref={setSlot}>
               {!authenticated ? <div className="council-browser-empty"><span>◎</span><strong>Sign in once, then open the persistent Project conversation you want as Lead.</strong><p>After the Tunnel is connected, open Agents and choose “Bind current ChatGPT as Lead”.</p></div> : null}
             </div>
