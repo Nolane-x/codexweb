@@ -1,6 +1,6 @@
 {
   "name": "codex-chatgpt-web",
-  "version": "3.3.0",
+  "version": "3.3.1",
   "private": true,
   "description": "Standalone Electron-first ChatGPT Council with Secure MCP Tunnel, persistent Playwright conversations, deliberation, wake routing, and managed multi-agent work.",
   "repository": {
