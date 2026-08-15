@@ -76,7 +76,7 @@ export class CouncilAutonomyBudgetLedger {
     const room = validId(input.projectRoomId, "projectRoomId");
     const target = input.targetAgentId ? validId(input.targetAgentId, "targetAgentId") : undefined;
     this.prune();
-    if (input.activeItems >= this.policy.maxActiveItemsPerProject) return this.denied("active durable work limit reached");
+    if (input.activeItems > this.policy.maxActiveItemsPerProject) return this.denied("active durable work limit reached");
     if (input.correlationDepth > this.policy.maxCorrelationDepth) return this.denied("autonomous correlation depth exceeded");
     if ((input.consecutiveRecoveryAttempts ?? 0) >= this.policy.maxConsecutiveRecoveryAttempts) return this.denied("agent recovery attempt limit reached");
     if (input.createdAt && this.now() - new Date(input.createdAt).getTime() > this.policy.maxQueuedAgeMs) return { allowed: false, code: "WORK_ITEM_STALE", reason: "queued work exceeded maximum age" };
