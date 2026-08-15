@@ -2,7 +2,7 @@
 set -eu
 
 REPOSITORY="${CODEX_CHATGPT_WEB_REPOSITORY:-Nolane-x/codexweb}"
-VERSION="${CODEX_CHATGPT_WEB_VERSION:-3.5.0}"
+VERSION="${CODEX_CHATGPT_WEB_VERSION:-3.6.0}"
 BIN_DIR="${CODEX_CHATGPT_WEB_BIN_DIR:-$HOME/.local/bin}"
 LIB_DIR="${CODEX_CHATGPT_WEB_LIB_DIR:-$HOME/.local/lib/codex-chatgpt-web}"
 DOC_DIR="${CODEX_CHATGPT_WEB_DOC_DIR:-$HOME/.local/share/doc/codex-chatgpt-web}"
@@ -28,13 +28,13 @@ trap 'rm -rf "$TEMP_DIR" "$STAGE_DIR"' EXIT HUP INT TERM
 curl -fsSL "$BASE_URL/$ASSET" -o "$TEMP_DIR/$ASSET"
 curl -fsSL "$BASE_URL/checksums.txt" -o "$TEMP_DIR/checksums.txt"
 EXPECTED="$(awk -v asset="$ASSET" '$2 == asset { print $1 }' "$TEMP_DIR/checksums.txt")"
-ACTUAL="$(shasum -a 256 "$TEMP_DIR/$ASSET" | awk '{ print $1 }')"
+ACTUAL="$(shasum -a 256 "$TEMP_DIR/$ASSET" | awk '{ print $1}')"
 if [ -z "$EXPECTED" ] || [ "$ACTUAL" != "$EXPECTED" ]; then echo "SHA-256 verification failed for $ASSET" >&2; exit 1; fi
 
 for DOC in LICENSE Bun-1.3.14.md THIRD_PARTY_NOTICES.txt; do
   curl -fsSL "$BASE_URL/$DOC" -o "$TEMP_DIR/$DOC"
   DOC_EXPECTED="$(awk -v asset="$DOC" '$2 == asset { print $1 }' "$TEMP_DIR/checksums.txt")"
-  DOC_ACTUAL="$(shasum -a 256 "$TEMP_DIR/$DOC" | awk '{ print $1 }')"
+  DOC_ACTUAL="$(shasum -a 256 "$TEMP_DIR/$DOC" | awk '{ print $1}')"
   if [ -z "$DOC_EXPECTED" ] || [ "$DOC_ACTUAL" != "$DOC_EXPECTED" ]; then echo "SHA-256 verification failed for $DOC" >&2; exit 1; fi
 done
 
@@ -57,7 +57,7 @@ if [ -e "$BACKUP_DIR" ]; then rm -rf "$BACKUP_DIR"; fi
 
 echo "Installed Council runtime $TARGET_DIR"
 if [ "$#" -gt 0 ]; then
-  echo "Council 3.5 no longer performs Codex setup from the runtime installer. Configure the Secure MCP Tunnel from the Electron app." >&2
+  echo "Council 3.6 no longer performs Codex setup from the runtime installer. Configure the Secure MCP Tunnel from the Electron app." >&2
   exit 2
 fi
 echo "Next: open the CodexWeb Council Electron app, sign in to ChatGPT, connect the Tunnel, then bind your Project chat as Lead."

@@ -11,6 +11,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { basename, join } from "node:path";
+import type { CouncilEvidenceStats, CouncilEvidenceStore } from "./evidence-store";
 
 const RUN_ID = /^obs_[A-Za-z0-9_-]{12,80}$/;
 const SCREENSHOT_ID = /^[A-Za-z0-9._-]{8,160}\.png$/;
@@ -86,6 +87,8 @@ function privateDirectory(path: string): void {
 }
 
 function clone<T>(value: T): T { return structuredClone(value); }
+function evidenceReference(runId: string, agentId: string): string { return `observation:${runId}:${agentId}`; }
+function evidencePrefix(runId: string): string { return `observation:${runId}:`; }
 
 function emptyHealth(): Record<CouncilObservationHealth, number> {
   return {
@@ -108,14 +111,16 @@ export class CouncilObservationStore {
   private readonly indexPath: string;
   private readonly maxRuns: number;
   private readonly maxBytes: number;
+  private readonly evidence?: CouncilEvidenceStore;
   private state: ObservationIndex;
 
-  constructor(root: string, options: { maxRuns?: number; maxBytes?: number } = {}) {
+  constructor(root: string, options: { maxRuns?: number; maxBytes?: number; evidence?: CouncilEvidenceStore } = {}) {
     this.root = root;
     this.screenshotRoot = join(root, "screenshots");
     this.indexPath = join(root, "index.json");
     this.maxRuns = Number.isInteger(options.maxRuns) && (options.maxRuns ?? 0) > 0 ? options.maxRuns! : DEFAULT_MAX_RUNS;
     this.maxBytes = Number.isFinite(options.maxBytes) && (options.maxBytes ?? 0) > 0 ? Math.trunc(options.maxBytes!) : DEFAULT_MAX_BYTES;
+    this.evidence = options.evidence;
     privateDirectory(this.root);
     privateDirectory(this.screenshotRoot);
     this.state = this.load();
@@ -184,11 +189,15 @@ export class CouncilObservationStore {
     };
     if (screenshot?.length) {
       const screenshotId = `${agentId.replace(/[^A-Za-z0-9._-]/g, "_").slice(0, 48)}-${randomUUID().slice(0, 12)}.png`;
-      const runDirectory = join(this.screenshotRoot, run.id);
-      privateDirectory(runDirectory);
-      const target = join(runDirectory, screenshotId);
-      writeFileSync(target, screenshot, { mode: 0o600, flag: "wx" });
-      try { chmodSync(target, 0o600); } catch {}
+      if (this.evidence) {
+        this.evidence.putPng(screenshot, evidenceReference(run.id, agentId));
+      } else {
+        const runDirectory = join(this.screenshotRoot, run.id);
+        privateDirectory(runDirectory);
+        const target = join(runDirectory, screenshotId);
+        writeFileSync(target, screenshot, { mode: 0o600, flag: "wx" });
+        try { chmodSync(target, 0o600); } catch {}
+      }
       record.screenshotId = screenshotId;
     }
     run.agents.push(record);
@@ -247,17 +256,37 @@ export class CouncilObservationStore {
   readScreenshot(runId: string, screenshotId: string): Buffer | undefined {
     if (!RUN_ID.test(runId) || !SCREENSHOT_ID.test(screenshotId) || basename(screenshotId) !== screenshotId) return undefined;
     const run = this.state.runs.find(candidate => candidate.id === runId);
-    if (!run?.agents.some(agent => agent.screenshotId === screenshotId)) return undefined;
+    const agent = run?.agents.find(candidate => candidate.screenshotId === screenshotId);
+    if (!run || !agent) return undefined;
+    if (this.evidence) {
+      const reference = evidenceReference(run.id, agent.agentId);
+      const existing = this.evidence.findByReference(reference);
+      if (existing) {
+        const bytes = this.evidence.readPng(existing.blobId);
+        if (bytes) return bytes;
+      }
+      const legacy = join(this.screenshotRoot, runId, screenshotId);
+      if (existsSync(legacy)) {
+        const bytes = readFileSync(legacy);
+        this.evidence.putPng(bytes, reference);
+        rmSync(legacy, { force: true });
+        return bytes;
+      }
+      return undefined;
+    }
     const path = join(this.screenshotRoot, runId, screenshotId);
     if (!existsSync(path)) return undefined;
     return readFileSync(path);
   }
+
+  evidenceStats(): CouncilEvidenceStats | null { return this.evidence?.stats() ?? null; }
 
   delete(runId: string): boolean {
     if (!RUN_ID.test(runId)) return false;
     const index = this.state.runs.findIndex(run => run.id === runId);
     if (index < 0) return false;
     this.state.runs.splice(index, 1);
+    this.evidence?.clearReferences(reference => reference.startsWith(evidencePrefix(runId)));
     rmSync(join(this.screenshotRoot, runId), { recursive: true, force: true });
     this.persist();
     return true;
@@ -266,6 +295,7 @@ export class CouncilObservationStore {
   clear(): number {
     const count = this.state.runs.length;
     this.state = { version: 1, runs: [] };
+    this.evidence?.clearReferences(reference => reference.startsWith("observation:"));
     rmSync(this.screenshotRoot, { recursive: true, force: true });
     privateDirectory(this.screenshotRoot);
     this.persist();
@@ -301,7 +331,7 @@ export class CouncilObservationStore {
   }
 
   private archiveBytes(): number {
-    let total = existsSync(this.indexPath) ? statSync(this.indexPath).size : 0;
+    let total = (existsSync(this.indexPath) ? statSync(this.indexPath).size : 0) + (this.evidence?.stats().bytes ?? 0);
     if (!existsSync(this.screenshotRoot)) return total;
     for (const run of readdirSync(this.screenshotRoot, { withFileTypes: true })) {
       if (!run.isDirectory() || !RUN_ID.test(run.name)) continue;
@@ -314,6 +344,11 @@ export class CouncilObservationStore {
     return total;
   }
 
+  private removeRunEvidence(runId: string): void {
+    this.evidence?.clearReferences(reference => reference.startsWith(evidencePrefix(runId)));
+    rmSync(join(this.screenshotRoot, runId), { recursive: true, force: true });
+  }
+
   private prune(): void {
     let changed = false;
     const oldestFirst = () => [...this.state.runs].sort((left, right) => left.startedAt.localeCompare(right.startedAt));
@@ -322,7 +357,7 @@ export class CouncilObservationStore {
       if (!victim) break;
       const index = this.state.runs.findIndex(run => run.id === victim.id);
       if (index >= 0) this.state.runs.splice(index, 1);
-      rmSync(join(this.screenshotRoot, victim.id), { recursive: true, force: true });
+      this.removeRunEvidence(victim.id);
       changed = true;
     }
     while (this.state.runs.length > 1 && this.archiveBytes() > this.maxBytes) {
@@ -330,7 +365,7 @@ export class CouncilObservationStore {
       if (!victim) break;
       const index = this.state.runs.findIndex(run => run.id === victim.id);
       if (index >= 0) this.state.runs.splice(index, 1);
-      rmSync(join(this.screenshotRoot, victim.id), { recursive: true, force: true });
+      this.removeRunEvidence(victim.id);
       changed = true;
     }
     if (changed) this.persist();

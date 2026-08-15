@@ -35,6 +35,7 @@ export interface CouncilAgentHealthRecord {
   lastFailureCode?: CouncilFailureCode;
   cooldownUntil?: string;
   lastObservedAt?: string;
+  flapping?: boolean;
   evidence: CouncilAgentHealthEvidence[];
 }
 
@@ -47,6 +48,8 @@ const STALL_BASE_MS = 2 * 60 * 1_000;
 const STALL_CAP_MS = 10 * 60 * 1_000;
 const TRANSIENT_BUSY_MS = 15_000;
 const MAX_EVIDENCE = 20;
+const HARD_BREAKERS = new Set<CouncilAgentHealthState>(["limited", "signed-out", "quarantined"]);
+const FAILURE_STATES = new Set<CouncilAgentHealthState>(["stalled", "limited", "signed-out", "disconnected", "conversation-missing", "surface-missing", "quarantined"]);
 
 function clone<T>(value: T): T { return structuredClone(value); }
 function safeNote(value: string | undefined): string | undefined {
@@ -83,14 +86,17 @@ export class CouncilAgentHealthLedger {
   observeSuccess(agentId: string, source: CouncilAgentHealthSource): CouncilAgentHealthRecord {
     const record = this.ensure(agentId);
     const now = this.isoNow();
-    record.state = "healthy";
+    const hardQuarantine = record.state === "quarantined" && source !== "operator";
+    if (!hardQuarantine) {
+      record.state = "healthy";
+      record.consecutiveFailures = 0;
+      delete record.lastFailureCode;
+      delete record.cooldownUntil;
+    }
     record.lastSuccessAt = now;
     record.lastAttemptAt = now;
     record.lastObservedAt = now;
-    record.consecutiveFailures = 0;
-    delete record.lastFailureCode;
-    delete record.cooldownUntil;
-    this.pushEvidence(record, { at: now, source, state: "healthy" });
+    this.pushEvidence(record, { at: now, source, state: "healthy", ...(hardQuarantine ? { note: "Healthy evidence observed but operator resolution is still required for ambiguous submission" } : {}) });
     this.write();
     return clone(record);
   }
@@ -98,7 +104,7 @@ export class CouncilAgentHealthLedger {
   observeSleeping(agentId: string, source: CouncilAgentHealthSource): CouncilAgentHealthRecord {
     const record = this.ensure(agentId);
     const now = this.isoNow();
-    if (record.state !== "limited" && record.state !== "signed-out" && record.state !== "quarantined") record.state = "sleeping";
+    if (!HARD_BREAKERS.has(record.state)) record.state = "sleeping";
     record.lastObservedAt = now;
     this.pushEvidence(record, { at: now, source, state: record.state, note: "Agent is parked between managed turns" });
     this.write();
@@ -108,15 +114,18 @@ export class CouncilAgentHealthLedger {
   observeSupervisor(agentId: string, state: CouncilAgentHealthState, note?: string): CouncilAgentHealthRecord {
     const record = this.ensure(agentId);
     const now = this.isoNow();
-    if (record.state !== "quarantined" || state === "healthy") record.state = state;
-    record.lastObservedAt = now;
+    const preserveHardBreaker = HARD_BREAKERS.has(record.state) && state === "healthy";
+    if (!preserveHardBreaker && record.state !== "quarantined") record.state = state;
     if (state === "healthy") {
       record.lastSuccessAt = now;
-      record.consecutiveFailures = 0;
-      delete record.lastFailureCode;
-      delete record.cooldownUntil;
+      if (!preserveHardBreaker) {
+        record.consecutiveFailures = 0;
+        delete record.lastFailureCode;
+        delete record.cooldownUntil;
+      }
     }
-    this.pushEvidence(record, { at: now, source: "supervisor", state: record.state, ...(safeNote(note) ? { note: safeNote(note)! } : {}) });
+    record.lastObservedAt = now;
+    this.pushEvidence(record, { at: now, source: "supervisor", state, ...(safeNote(note) ? { note: safeNote(note)! } : {}) });
     this.write();
     return clone(record);
   }
@@ -175,6 +184,20 @@ export class CouncilAgentHealthLedger {
     return clone(record);
   }
 
+  clearQuarantine(agentId: string, note = "operator resolved exceptional work"): CouncilAgentHealthRecord {
+    const record = this.ensure(agentId);
+    const now = this.isoNow();
+    record.state = "healthy";
+    record.lastSuccessAt = now;
+    record.lastObservedAt = now;
+    record.consecutiveFailures = 0;
+    delete record.lastFailureCode;
+    delete record.cooldownUntil;
+    this.pushEvidence(record, { at: now, source: "operator", state: "healthy", note });
+    this.write();
+    return clone(record);
+  }
+
   canAttempt(agentId: string): { allowed: boolean; reasonCode?: CouncilFailureCode; retryAt?: string } {
     const record = this.state.agents[validAgentId(agentId)];
     if (!record) return { allowed: true };
@@ -193,6 +216,14 @@ export class CouncilAgentHealthLedger {
 
   private pushEvidence(record: CouncilAgentHealthRecord, evidence: CouncilAgentHealthEvidence): void {
     record.evidence = [...record.evidence, { ...evidence, ...(safeNote(evidence.note) ? { note: safeNote(evidence.note)! } : {}) }].slice(-MAX_EVIDENCE);
+    const samples = record.evidence.filter(sample => sample.state === "healthy" || FAILURE_STATES.has(sample.state)).slice(-8);
+    let transitions = 0;
+    for (let index = 1; index < samples.length; index += 1) {
+      const previousHealthy = samples[index - 1]!.state === "healthy";
+      const currentHealthy = samples[index]!.state === "healthy";
+      if (previousHealthy !== currentHealthy) transitions += 1;
+    }
+    record.flapping = samples.length >= 6 && transitions >= 4;
   }
 
   private load(): HealthStateFile {
@@ -200,6 +231,13 @@ export class CouncilAgentHealthLedger {
     try {
       const parsed = JSON.parse(readFileSync(this.path, "utf8")) as HealthStateFile;
       if (parsed.version !== 1 || !parsed.agents || typeof parsed.agents !== "object" || Array.isArray(parsed.agents)) throw new Error("invalid health state");
+      for (const record of Object.values(parsed.agents)) {
+        record.evidence = Array.isArray(record.evidence) ? record.evidence.slice(-MAX_EVIDENCE) : [];
+        const samples = record.evidence.filter(sample => sample.state === "healthy" || FAILURE_STATES.has(sample.state)).slice(-8);
+        let transitions = 0;
+        for (let index = 1; index < samples.length; index += 1) if ((samples[index - 1]!.state === "healthy") !== (samples[index]!.state === "healthy")) transitions += 1;
+        record.flapping = samples.length >= 6 && transitions >= 4;
+      }
       return parsed;
     } catch (error) {
       try { renameSync(this.path, `${this.path}.corrupt-${Date.now()}`); } catch {}

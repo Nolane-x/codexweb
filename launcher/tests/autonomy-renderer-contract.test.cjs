@@ -17,9 +17,31 @@ test("Council workspace renders durable autonomy state from the safe shared proj
   assert.match(types, /autonomy\?: CouncilAutonomyStatusView \| null/);
 });
 
+test("Council 3.6 exposes human-only exceptional work recovery and safe memory pages", () => {
+  const app = read("src/CouncilApp.tsx");
+  const preload = read("electron/preload.cjs");
+  const main = read("electron/main-council.cjs");
+  assert.match(app, /AutonomyPanel/);
+  assert.match(app, /MemoryPanel/);
+  assert.match(app, /Create explicit retry intent/);
+  assert.match(app, /provenance/);
+  for (const channel of [
+    "launcher:council-autonomy-status",
+    "launcher:council-autonomy-exceptional",
+    "launcher:council-autonomy-cancel",
+    "launcher:council-autonomy-retry-uncertain",
+    "launcher:council-memory-search",
+    "launcher:council-memory-recent",
+  ]) {
+    assert.match(preload, new RegExp(channel.replaceAll("-", "\\-")));
+    assert.match(main, new RegExp(channel.replaceAll("-", "\\-")));
+  }
+});
+
 test("sandbox preload keeps owner-control secrets behind main-process IPC", () => {
   const preload = read("electron/preload.cjs");
   assert.doesNotMatch(preload, /require\(["']\.\/council-owner-client\.cjs["']\)/);
   assert.doesNotMatch(preload, /owner-control\.json/);
+  assert.doesNotMatch(preload, /Bearer /);
   assert.match(preload, /ipcRenderer\.invoke\("launcher:council-supervisor-status"\)/);
 });

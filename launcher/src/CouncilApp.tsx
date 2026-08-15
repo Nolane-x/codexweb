@@ -1,9 +1,54 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useState } from "react";
 import type { BrowserState, CouncilAutonomyStatusView, CouncilRuntimeViewState, LauncherSnapshot, LogRecord, ManagedAgentView } from "./types";
 import "./council-shell.css";
+import "./council-36.css";
+
+type CouncilExceptionalWorkView = {
+  id: string;
+  kind: string;
+  projectRoomId: string;
+  targetAgentId?: string;
+  taskId?: string;
+  state: "uncertain" | "failed";
+  attempt: number;
+  maxAttempts: number;
+  lastPhase?: string;
+  failureCode?: string;
+  failureMessage?: string;
+  correlationId: string;
+  createdAt: string;
+  updatedAt: string;
+  reasons: string[];
+};
+type CouncilMemoryView = {
+  id: string;
+  projectRoomId: string;
+  sourceType: string;
+  sourceId: string;
+  text: string;
+  agentIds: string[];
+  taskIds: string[];
+  updatedAt: string;
+  score: number;
+  provenance: { sourceType: string; sourceId: string };
+};
+type CouncilMemoryStatsView = { entries: number; oldestAt: string | null; newestAt: string | null };
+type CouncilEvidenceStatsView = { blobs: number; references: number; bytes: number; maxBytes: number; overBudget: boolean } | null;
+type Council36Api = {
+  councilAutonomyStatus(): Promise<CouncilAutonomyStatusView & { exceptionalCount?: number }>;
+  councilExceptionalWork(): Promise<CouncilExceptionalWorkView[]>;
+  cancelCouncilExceptionalWork(workItemId: string): Promise<unknown>;
+  retryCouncilUncertainWork(workItemId: string): Promise<unknown>;
+  councilMemoryStats(roomId?: string | null): Promise<CouncilMemoryStatsView>;
+  councilMemorySearch(roomId: string, query: string, limit?: number): Promise<CouncilMemoryView[]>;
+  councilMemoryRecent(roomId: string, limit?: number): Promise<CouncilMemoryView[]>;
+  clearCouncilProjectMemory(roomId: string): Promise<{ deleted: number }>;
+  councilObservationStorage(): Promise<CouncilEvidenceStatsView>;
+};
 
 const api = window.codexWebLauncher;
-type View = "chatgpt" | "activity" | "settings";
+const api36 = api as (typeof api & Council36Api);
+type View = "chatgpt" | "activity" | "autonomy" | "memory" | "settings";
 
 function messageOf(error: unknown): string { return error instanceof Error ? error.message : String(error); }
 
@@ -15,10 +60,19 @@ function autonomyStatus(runtime: CouncilRuntimeViewState | null): CouncilAutonom
   if (runtime?.projection.syncState !== "live" && runtime?.projection.syncState !== "stale") return null;
   return runtime.projection.state.managed?.autonomy ?? null;
 }
+function projectRoomId(runtime: CouncilRuntimeViewState | null): string | null {
+  if (runtime?.projection.syncState !== "live" && runtime?.projection.syncState !== "stale") return null;
+  return runtime.projection.state.managed?.project?.roomId ?? null;
+}
 
 function compactHealth(value?: string): string {
   if (!value) return "unknown";
   return value.replace("conversation-missing", "missing chat").replace("surface-missing", "surface").replace("signed-out", "signed out");
+}
+function bytes(value: number): string {
+  if (value < 1024) return `${value} B`;
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
+  return `${(value / 1024 / 1024).toFixed(1)} MB`;
 }
 
 export function CouncilApp() {
@@ -81,6 +135,7 @@ export function CouncilApp() {
 
   const agents = useMemo(() => managedAgents(councilRuntime), [councilRuntime]);
   const autonomy = useMemo(() => autonomyStatus(councilRuntime), [councilRuntime]);
+  const roomId = useMemo(() => projectRoomId(councilRuntime), [councilRuntime]);
   const healthByAgent = useMemo(() => new Map((autonomy?.health ?? []).map(health => [health.agentId, health])), [autonomy]);
   const tabByAgent = useMemo(() => new Map((browser?.tabs ?? []).filter(tab => tab.agentId).map(tab => [tab.agentId!, tab])), [browser]);
   const otherTabs = useMemo(() => (browser?.tabs ?? []).filter(tab => tab.id !== "home" && !tab.agentId), [browser]);
@@ -125,6 +180,8 @@ export function CouncilApp() {
         <nav>
           <button className={view === "chatgpt" ? "active" : ""} onClick={() => setView("chatgpt")}><b>◎</b><span>ChatGPT</span></button>
           <button className={view === "activity" ? "active" : ""} onClick={() => setView("activity")}><b>≋</b><span>Activity</span></button>
+          <button className={view === "autonomy" ? "active" : ""} onClick={() => setView("autonomy")}><b>↻</b><span>Autonomy</span></button>
+          <button className={view === "memory" ? "active" : ""} onClick={() => setView("memory")}><b>◇</b><span>Memory</span></button>
           <button className={view === "settings" ? "active" : ""} onClick={() => setView("settings")}><b>⚙</b><span>Settings</span></button>
         </nav>
         <div className="council-sidebar-health">
@@ -169,12 +226,14 @@ export function CouncilApp() {
             </div>
             {autonomy ? <div className="council-autonomy-strip"><span><i className={autonomy.dispatcher.running ? "live" : ""} /> durable loop</span><strong>{autonomy.queue.totalActive} active</strong><small>{autonomy.dispatcher.retryWait} retry wait · {autonomy.dispatcher.uncertain} uncertain · {autonomy.breakerOpenCount} breakers · {autonomy.audit.count} audit events</small></div> : null}
             <div className="council-browser-slot" ref={setSlot}>
-              {!authenticated ? <div className="council-browser-empty"><span>◎</span><strong>Sign in once, then open the persistent Project conversation you want as Lead.</strong><p>After the Tunnel is connected, open Agents and choose “Bind current ChatGPT as Lead”.</p></div> : null}
+              {!authenticated ? <div className="council-browser-empty"><span>◎</span><strong>Sign in once, then open the persistent Project conversation you want as Lead.</strong><p>After the Tunnel is connected, bind the current persistent ChatGPT as Lead.</p></div> : null}
             </div>
           </>
         ) : null}
 
         {view === "activity" ? <Activity logs={logs} autonomy={autonomy} /> : null}
+        {view === "autonomy" ? <AutonomyPanel roomId={roomId} shared={autonomy} /> : null}
+        {view === "memory" ? <MemoryPanel roomId={roomId} /> : null}
         {view === "settings" ? <Settings snapshot={snapshot} busy={busy} run={run} /> : null}
       </section>
 
@@ -193,6 +252,75 @@ function Activity({ logs, autonomy }: { logs: LogRecord[]; autonomy: CouncilAuto
     </div> : null}
     {autonomy?.health.length ? <div className="council-health-grid">{autonomy.health.map(item => <article key={item.agentId}><div><strong>{item.agentId}</strong><small>{item.lastFailureCode ?? "no failure"}</small></div><em className={`health-${item.state}`}>{compactHealth(item.state)}</em><span>{item.cooldownUntil ? `cooldown until ${new Date(item.cooldownUntil).toLocaleTimeString()}` : item.lastSuccessAt ? `last success ${new Date(item.lastSuccessAt).toLocaleTimeString()}` : "awaiting evidence"}</span></article>)}</div> : null}
     <div className="council-log-list">{logs.length ? logs.map((log, index) => <article key={`${log.at}-${index}`}><time>{new Date(log.at).toLocaleTimeString()}</time><b className={log.level}>{log.level}</b><strong>{log.event}</strong><code>{JSON.stringify(log.detail)}</code></article>) : <p>No activity yet.</p>}</div>
+  </div>;
+}
+
+function AutonomyPanel({ roomId, shared }: { roomId: string | null; shared: CouncilAutonomyStatusView | null }) {
+  const [status, setStatus] = useState<(CouncilAutonomyStatusView & { exceptionalCount?: number }) | null>(shared);
+  const [exceptional, setExceptional] = useState<CouncilExceptionalWorkView[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  const [working, setWorking] = useState<string | null>(null);
+  const refresh = useCallback(async () => {
+    if (!api36?.councilAutonomyStatus) return;
+    const [nextStatus, nextExceptional] = await Promise.all([api36.councilAutonomyStatus(), api36.councilExceptionalWork()]);
+    setStatus(nextStatus); setExceptional(nextExceptional); setError(null);
+  }, []);
+  useEffect(() => { void refresh().catch(error => setError(messageOf(error))); const timer = setInterval(() => void refresh().catch(() => {}), 5_000); return () => clearInterval(timer); }, [refresh]);
+  const mutate = async (id: string, action: "cancel" | "retry") => {
+    setWorking(id); setError(null);
+    try {
+      if (action === "cancel") await api36!.cancelCouncilExceptionalWork(id); else await api36!.retryCouncilUncertainWork(id);
+      await refresh();
+    } catch (error) { setError(messageOf(error)); }
+    finally { setWorking(null); }
+  };
+  return <div className="council-page council-36-page"><header><span>DURABLE EXECUTION</span><h2>Autonomy</h2><p>Exceptional work is deliberately fail-closed. Ambiguous post-submit turns are never retried unless a human explicitly creates a new intent here.</p></header>
+    <div className="council-36-kpis">
+      <article><span>ACTIVE</span><strong>{status?.queue.totalActive ?? 0}</strong><small>{status?.dispatcher.activeWorkItemId ?? "dispatcher idle"}</small></article>
+      <article><span>UNCERTAIN</span><strong className={(status?.dispatcher.uncertain ?? 0) ? "warn" : ""}>{status?.dispatcher.uncertain ?? 0}</strong><small>human resolution required</small></article>
+      <article><span>FAILED</span><strong>{status?.dispatcher.failed ?? 0}</strong><small>terminal work records</small></article>
+      <article><span>BREAKERS</span><strong className={(status?.breakerOpenCount ?? 0) ? "warn" : ""}>{status?.breakerOpenCount ?? 0}</strong><small>{roomId ? `project ${roomId}` : "no active project"}</small></article>
+    </div>
+    {error ? <p className="council-36-inline-error">{error}</p> : null}
+    <section className="council-36-section"><div className="council-36-section-title"><div><span>OPERATOR QUEUE</span><h3>Exceptional work</h3></div><button onClick={() => void refresh()}>Refresh</button></div>
+      {exceptional.length ? <div className="council-36-list">{exceptional.map(item => <article key={item.id} className={`council-36-exception ${item.state}`}><div className="council-36-row"><div><strong>{item.kind}</strong><code>{item.id}</code></div><em>{item.state}</em></div><p>{item.failureCode ?? "terminal"}{item.failureMessage ? ` · ${item.failureMessage}` : ""}</p><small>{item.targetAgentId ? `agent ${item.targetAgentId}` : "no target"}{item.taskId ? ` · task ${item.taskId}` : ""} · phase {item.lastPhase ?? "unknown"} · updated {new Date(item.updatedAt).toLocaleString()}</small><div className="council-36-actions"><button disabled={working === item.id} onClick={() => void mutate(item.id, "cancel")}>Cancel terminal record</button>{item.state === "uncertain" ? <button className="primary" disabled={working === item.id} onClick={() => void mutate(item.id, "retry")}>Create explicit retry intent</button> : null}</div></article>)}</div> : <div className="council-36-empty">No uncertain or failed durable work needs operator attention.</div>}
+    </section>
+    {status?.health.length ? <section className="council-36-section"><div className="council-36-section-title"><div><span>TEAM SAFETY</span><h3>Health & circuit breakers</h3></div></div><div className="council-36-health">{status.health.map(agent => <article key={agent.agentId}><div><strong>{agent.agentId}</strong><em>{compactHealth(agent.state)}</em></div><small>{agent.lastFailureCode ?? "healthy evidence"}{(agent as typeof agent & { flapping?: boolean }).flapping ? " · flapping detected" : ""}</small></article>)}</div></section> : null}
+  </div>;
+}
+
+function MemoryPanel({ roomId }: { roomId: string | null }) {
+  const [query, setQuery] = useState("");
+  const [stats, setStats] = useState<CouncilMemoryStatsView | null>(null);
+  const [storage, setStorage] = useState<CouncilEvidenceStatsView>(null);
+  const [results, setResults] = useState<CouncilMemoryView[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  const [working, setWorking] = useState(false);
+  const loadRecent = useCallback(async () => {
+    if (!roomId || !api36?.councilMemoryRecent) { setResults([]); return; }
+    const [nextStats, nextStorage, recent] = await Promise.all([api36.councilMemoryStats(roomId), api36.councilObservationStorage(), api36.councilMemoryRecent(roomId, 30)]);
+    setStats(nextStats); setStorage(nextStorage); setResults(recent); setError(null);
+  }, [roomId]);
+  useEffect(() => { void loadRecent().catch(error => setError(messageOf(error))); }, [loadRecent]);
+  const search = async () => {
+    if (!roomId || query.trim().length < 2) return;
+    setWorking(true); setError(null);
+    try { setResults(await api36!.councilMemorySearch(roomId, query.trim(), 30)); setStats(await api36!.councilMemoryStats(roomId)); }
+    catch (error) { setError(messageOf(error)); }
+    finally { setWorking(false); }
+  };
+  const clear = async () => {
+    if (!roomId) return;
+    setWorking(true); setError(null);
+    try { await api36!.clearCouncilProjectMemory(roomId); setResults([]); setStats(await api36!.councilMemoryStats(roomId)); }
+    catch (error) { setError(messageOf(error)); }
+    finally { setWorking(false); }
+  };
+  return <div className="council-page council-36-page"><header><span>LONG-HORIZON CONTINUITY</span><h2>Memory</h2><p>Safe bounded project knowledge is retained with provenance. Raw browser pages, credentials, conversation URLs, checkpoints and screenshot bytes are not exposed here.</p></header>
+    <div className="council-36-kpis"><article><span>MEMORY ENTRIES</span><strong>{stats?.entries ?? 0}</strong><small>{stats?.newestAt ? `latest ${new Date(stats.newestAt).toLocaleString()}` : "empty index"}</small></article><article><span>EVIDENCE BLOBS</span><strong>{storage?.blobs ?? 0}</strong><small>{storage ? `${storage.references} refs · ${bytes(storage.bytes)}` : "not available"}</small></article><article><span>DEDUP BUDGET</span><strong>{storage ? bytes(storage.maxBytes) : "—"}</strong><small>{storage?.overBudget ? "over budget; prune sources" : "content-addressed archive"}</small></article><article><span>PROJECT</span><strong>{roomId ?? "—"}</strong><small>memory is room-scoped</small></article></div>
+    <section className="council-36-section"><div className="council-36-search"><input value={query} placeholder="Search project decisions, tasks, observations, audit evidence…" onChange={event => setQuery(event.target.value)} onKeyDown={event => { if (event.key === "Enter") void search(); }} disabled={!roomId || working} /><button className="primary" disabled={!roomId || query.trim().length < 2 || working} onClick={() => void search()}>Search</button><button disabled={!roomId || working} onClick={() => void loadRecent()}>Recent</button><button className="danger" disabled={!roomId || working} onClick={() => void clear()}>Clear retained index</button></div>{error ? <p className="council-36-inline-error">{error}</p> : null}
+      {results.length ? <div className="council-36-memory-list">{results.map(item => <article key={item.id}><div className="council-36-row"><strong>{item.sourceType}</strong><em>{item.score < 1 ? `${Math.round(item.score * 100)}%` : "recent"}</em></div><p>{item.text}</p><small>source {item.provenance.sourceType}:{item.provenance.sourceId}{item.agentIds.length ? ` · agents ${item.agentIds.join(", ")}` : ""}{item.taskIds.length ? ` · tasks ${item.taskIds.join(", ")}` : ""}</small></article>)}</div> : <div className="council-36-empty">{roomId ? "No retained memory matches this view yet." : "Bind a managed Council project to use project memory."}</div>}
+    </section>
   </div>;
 }
 

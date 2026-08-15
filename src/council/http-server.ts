@@ -16,6 +16,7 @@ const MAX_SYNC_WAIT_MS = 25_000;
 export interface CouncilManagedPublicView {
   project: ManagedCouncilProject | null;
   agents: PublicManagedAgent[];
+  autonomy?: unknown;
 }
 
 export interface CouncilPublicSnapshot {
@@ -47,12 +48,29 @@ export interface CouncilOwnerSupervisorApi {
   screenshot: (runId: string, screenshotId: string) => Buffer | undefined;
   deleteObservation: (runId: string) => boolean;
   clearHistory: () => number;
+  storageStats?: () => unknown;
+}
+
+export interface CouncilOwnerAutonomyApi {
+  status: () => unknown;
+  exceptional: () => unknown;
+  cancelExceptional: (workItemId: string) => unknown;
+  retryUncertain: (workItemId: string) => unknown;
+}
+
+export interface CouncilOwnerMemoryApi {
+  stats: (projectRoomId?: string) => unknown;
+  search: (input: { projectRoomId: string; query: string; limit: number }) => unknown;
+  recent: (input: { projectRoomId: string; limit: number }) => unknown;
+  clearProject: (projectRoomId: string) => unknown;
 }
 
 export interface CouncilOwnerApi {
   token: () => string | undefined;
   startLead: (input: { conversationUrl: string; projectName: string }) => Promise<unknown>;
   supervisor?: CouncilOwnerSupervisorApi;
+  autonomy?: CouncilOwnerAutonomyApi;
+  memory?: CouncilOwnerMemoryApi;
 }
 
 function canonicalPublicWake(wake: CouncilWakeEvent): CouncilWakeEvent {
@@ -155,6 +173,13 @@ function ownerId(body: Record<string, unknown>, key: string): string {
   return value;
 }
 
+function ownerLimit(body: Record<string, unknown>, fallback: number, max: number): number {
+  const raw = body.limit;
+  if (raw === undefined || raw === null) return fallback;
+  if (typeof raw !== "number" || !Number.isInteger(raw) || raw < 1) throw new Error("limit is invalid");
+  return Math.min(max, raw);
+}
+
 export function startCouncilHttpServer(
   store: CouncilStore,
   options: { port?: number; onError?: (message: string) => void; managedSnapshot?: () => CouncilManagedPublicView | null; owner?: CouncilOwnerApi } = {},
@@ -213,6 +238,31 @@ export function startCouncilHttpServer(
               const projectName = ownerString(body, "project_name", 160);
               return ownerJson(await options.owner!.startLead({ conversationUrl, projectName }));
             }
+
+            if (url.pathname.startsWith("/api/owner/autonomy/")) {
+              const autonomy = options.owner?.autonomy;
+              if (!autonomy) return ownerJson("Council autonomy operator controls are unavailable", 503);
+              if (url.pathname === "/api/owner/autonomy/status") return ownerJson(autonomy.status());
+              if (url.pathname === "/api/owner/autonomy/exceptional") return ownerJson(autonomy.exceptional());
+              if (url.pathname === "/api/owner/autonomy/cancel") return ownerJson(autonomy.cancelExceptional(ownerId(body, "work_item_id")));
+              if (url.pathname === "/api/owner/autonomy/retry-uncertain") return ownerJson(autonomy.retryUncertain(ownerId(body, "work_item_id")));
+              return ownerJson("Unknown autonomy owner operation", 404);
+            }
+
+            if (url.pathname.startsWith("/api/owner/memory/")) {
+              const memory = options.owner?.memory;
+              if (!memory) return ownerJson("Council memory operator controls are unavailable", 503);
+              if (url.pathname === "/api/owner/memory/stats") {
+                const raw = body.room_id;
+                if (raw !== undefined && raw !== null && typeof raw !== "string") throw new Error("room_id is invalid");
+                return ownerJson(memory.stats(typeof raw === "string" && raw.trim() ? ownerId(body, "room_id") : undefined));
+              }
+              if (url.pathname === "/api/owner/memory/search") return ownerJson(memory.search({ projectRoomId: ownerId(body, "room_id"), query: ownerString(body, "query", 500), limit: ownerLimit(body, 20, 50) }));
+              if (url.pathname === "/api/owner/memory/recent") return ownerJson(memory.recent({ projectRoomId: ownerId(body, "room_id"), limit: ownerLimit(body, 30, 100) }));
+              if (url.pathname === "/api/owner/memory/clear-project") return ownerJson({ deleted: memory.clearProject(ownerId(body, "room_id")) });
+              return ownerJson("Unknown memory owner operation", 404);
+            }
+
             const supervisor = options.owner?.supervisor;
             if (!supervisor) return ownerJson("Council supervisor is unavailable", 503);
             if (url.pathname === "/api/owner/supervisor/status") return ownerJson(supervisor.status());
@@ -224,6 +274,7 @@ export function startCouncilHttpServer(
             }
             if (url.pathname === "/api/owner/supervisor/run") return ownerJson(await supervisor.runNow());
             if (url.pathname === "/api/owner/observations/list") return ownerJson(supervisor.history());
+            if (url.pathname === "/api/owner/observations/storage") return ownerJson(supervisor.storageStats?.() ?? null);
             if (url.pathname === "/api/owner/observations/read") {
               const value = supervisor.observation(ownerId(body, "run_id"));
               return value ? ownerJson(value) : ownerJson("Observation does not exist", 404);
