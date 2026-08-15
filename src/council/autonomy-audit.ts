@@ -56,7 +56,7 @@ export class CouncilAutonomyAuditStore {
   constructor(path: string, options: { now?: () => number; maxEvents?: number; maxAgeMs?: number } = {}) {
     this.path = path;
     this.now = options.now ?? Date.now;
-    this.maxEvents = Math.max(10, Math.min(100_000, Math.trunc(options.maxEvents ?? DEFAULT_MAX_EVENTS)));
+    this.maxEvents = Math.max(1, Math.min(100_000, Math.trunc(options.maxEvents ?? DEFAULT_MAX_EVENTS)));
     this.maxAgeMs = Math.max(1_000, Math.min(365 * 24 * 60 * 60 * 1_000, Math.trunc(options.maxAgeMs ?? DEFAULT_MAX_AGE_MS)));
     this.state = this.load();
     this.prune(false);
