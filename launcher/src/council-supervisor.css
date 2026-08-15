@@ -1,0 +1,171 @@
+.council-supervisor-launch {
+  position: fixed;
+  right: 18px;
+  bottom: 76px;
+  z-index: 86;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 38px;
+  padding: 0 13px;
+  border: 1px solid rgba(255,255,255,.12);
+  border-radius: 12px;
+  background: rgba(24,24,24,.94);
+  color: #ececec;
+  box-shadow: 0 12px 32px rgba(0,0,0,.28);
+  backdrop-filter: blur(18px);
+}
+.council-supervisor-launch span { font-size: 18px; }
+.council-supervisor-launch strong { font-size: 12px; letter-spacing: .02em; }
+.council-supervisor-launch i { width: 7px; height: 7px; border-radius: 999px; background: #70d89b; box-shadow: 0 0 0 4px rgba(112,216,155,.12); }
+.council-supervisor-launch.is-live { border-color: rgba(112,216,155,.3); }
+.council-supervisor-launch.is-open { background: #252525; }
+
+.council-supervisor-panel {
+  position: fixed;
+  z-index: 100;
+  right: 18px;
+  bottom: 124px;
+  width: min(560px, calc(100vw - 36px));
+  max-height: min(780px, calc(100vh - 156px));
+  overflow: auto;
+  border: 1px solid rgba(255,255,255,.12);
+  border-radius: 18px;
+  background: rgba(21,21,21,.985);
+  color: #ececec;
+  box-shadow: 0 28px 80px rgba(0,0,0,.46);
+  backdrop-filter: blur(24px);
+}
+.council-supervisor-panel > header {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 18px;
+  background: rgba(21,21,21,.96);
+  border-bottom: 1px solid rgba(255,255,255,.08);
+  backdrop-filter: blur(20px);
+}
+.council-supervisor-panel > header div { display: grid; gap: 2px; }
+.council-supervisor-panel > header span,
+.council-manager-analysis span { color: #8e8e8e; font-size: 9px; font-weight: 700; letter-spacing: .16em; }
+.council-supervisor-panel > header strong { font-size: 15px; }
+.council-supervisor-panel > header button,
+.council-history-delete { border: 0; background: transparent; color: #8d8d8d; font-size: 20px; }
+
+.council-supervisor-status {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0,1fr));
+  gap: 8px;
+  padding: 14px 16px 8px;
+}
+.council-supervisor-status > div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid rgba(255,255,255,.07);
+  border-radius: 11px;
+  background: rgba(255,255,255,.025);
+}
+.council-supervisor-status span { color: #858585; font-size: 9px; text-transform: uppercase; letter-spacing: .08em; }
+.council-supervisor-status strong { overflow: hidden; color: #dcdcdc; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.council-supervisor-copy { padding: 4px 17px 10px; color: #9d9d9d; font-size: 11px; line-height: 1.55; }
+
+.council-manager-picker,
+.council-history-list,
+.council-observation-detail { margin: 0 14px 14px; }
+.council-manager-picker-head,
+.council-history-head,
+.council-observation-detail-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.council-manager-picker-head { margin-bottom: 8px; }
+.council-manager-picker-head strong,
+.council-history-head strong { font-size: 12px; }
+.council-manager-picker-head button,
+.council-history-head button,
+.council-observation-agents button {
+  border: 1px solid rgba(255,255,255,.1);
+  border-radius: 8px;
+  background: #252525;
+  color: #bdbdbd;
+  padding: 6px 9px;
+  font-size: 10px;
+}
+.council-manager-picker label {
+  display: grid;
+  grid-template-columns: 20px minmax(0,1fr) auto;
+  align-items: center;
+  gap: 9px;
+  padding: 9px 10px;
+  margin-top: 5px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: rgba(255,255,255,.025);
+  cursor: pointer;
+}
+.council-manager-picker label:hover { background: rgba(255,255,255,.045); }
+.council-manager-picker label.selected { border-color: rgba(112,216,155,.27); background: rgba(112,216,155,.055); }
+.council-manager-picker label span { display: grid; gap: 1px; min-width: 0; }
+.council-manager-picker label strong { font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.council-manager-picker label small { color: #858585; font-size: 9px; }
+.council-manager-picker label em { font-style: normal; color: #858585; font-size: 9px; }
+.council-manager-picker label em.runtime-active { color: #70d89b; }
+.council-manager-picker label em.runtime-failed { color: #f28b82; }
+
+.council-supervisor-actions { display: grid; gap: 6px; padding: 0 14px 15px; }
+.council-supervisor-actions button.primary {
+  min-height: 36px;
+  border: 1px solid rgba(112,216,155,.3);
+  border-radius: 10px;
+  background: rgba(112,216,155,.1);
+  color: #bceacb;
+  font-weight: 650;
+}
+.council-supervisor-actions button:disabled { opacity: .45; }
+.council-supervisor-actions small { color: #f2b8b5; font-size: 10px; }
+
+.council-history-head { padding: 12px 15px 8px; border-top: 1px solid rgba(255,255,255,.07); }
+.council-history-head > div { display: grid; gap: 2px; }
+.council-history-head small { color: #777; font-size: 9px; max-width: 360px; }
+.council-history-list { display: grid; gap: 5px; }
+.council-history-list article { display: flex; align-items: center; border: 1px solid rgba(255,255,255,.06); border-radius: 10px; background: rgba(255,255,255,.02); }
+.council-history-list article.selected { border-color: rgba(139,180,255,.25); background: rgba(139,180,255,.05); }
+.council-history-open { flex: 1; display: flex; align-items: center; justify-content: space-between; gap: 10px; min-width: 0; padding: 9px 10px; border: 0; background: transparent; color: inherit; text-align: left; }
+.council-history-open span { display: grid; gap: 2px; min-width: 0; }
+.council-history-open strong { font-size: 10px; }
+.council-history-open small { color: #7f7f7f; font-size: 9px; }
+.council-history-open em { padding: 3px 6px; border-radius: 999px; background: rgba(255,255,255,.05); color: #999; font-size: 8px; font-style: normal; text-transform: uppercase; }
+.council-history-open em.status-completed { color: #9fd8b4; }
+.council-history-open em.status-failed { color: #f2aaa5; }
+.council-history-delete { padding: 4px 10px; font-size: 15px; }
+
+.council-observation-detail { padding: 12px; border: 1px solid rgba(255,255,255,.07); border-radius: 12px; background: rgba(0,0,0,.15); }
+.council-observation-detail-head { padding-bottom: 9px; }
+.council-observation-detail-head strong { font-size: 11px; }
+.council-observation-detail-head span { color: #888; font-size: 9px; text-transform: uppercase; }
+.council-observation-agents { display: grid; gap: 8px; }
+.council-observation-agents article { display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 6px 10px; padding: 10px; border-radius: 9px; background: rgba(255,255,255,.025); }
+.council-observation-agents article > div { display: grid; gap: 1px; }
+.council-observation-agents strong { font-size: 10px; }
+.council-observation-agents small { color: #777; font-size: 9px; }
+.council-observation-agents em { align-self: start; padding: 3px 6px; border-radius: 999px; background: rgba(255,255,255,.05); font-size: 8px; font-style: normal; }
+.council-observation-agents em.ok { color: #8fdaad; }
+.council-observation-agents em.warn { color: #f4cc74; }
+.council-observation-agents em.bad { color: #f0a29d; }
+.council-observation-agents em.muted { color: #999; }
+.council-observation-agents p { grid-column: 1 / -1; margin: 0; color: #8a8a8a; font-size: 9px; line-height: 1.45; }
+.council-observation-agents img { grid-column: 1 / -1; width: 100%; max-height: 300px; object-fit: contain; border: 1px solid rgba(255,255,255,.08); border-radius: 8px; background: #0c0c0c; }
+.council-observation-agents button { grid-column: 1 / -1; justify-self: start; }
+.council-manager-analysis { margin-top: 10px; padding: 10px; border-radius: 9px; background: rgba(139,180,255,.045); }
+.council-manager-analysis p { margin: 5px 0 0; white-space: pre-wrap; color: #aaa; font-size: 10px; line-height: 1.55; }
+.council-manager-analysis.error { background: rgba(242,139,130,.05); }
+.council-supervisor-error { margin: 0 14px 14px; padding: 9px 10px; border: 1px solid rgba(242,139,130,.16); border-radius: 9px; color: #efaaa5; background: rgba(242,139,130,.05); font-size: 10px; }
+.council-supervisor-empty { margin: 8px 0; color: #777; font-size: 10px; }
+
+@media (max-width: 720px) {
+  .council-supervisor-status { grid-template-columns: repeat(2,minmax(0,1fr)); }
+  .council-supervisor-panel { right: 8px; bottom: 112px; width: calc(100vw - 16px); }
+  .council-supervisor-launch { right: 8px; }
+}

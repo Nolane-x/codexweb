@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import type { CouncilObservationHealth } from "./observation-store";
 
 export class CouncilConversationUnavailableError extends Error {
   constructor(message = "Council conversation is unavailable") { super(message); this.name = "CouncilConversationUnavailableError"; }
@@ -15,9 +16,16 @@ export interface CouncilPersistentTurnControl {
   release?(input: { bindingKey: string }): Promise<boolean>;
 }
 
+export interface CouncilPromptAttachment {
+  name: string;
+  mimeType: "image/png" | "image/jpeg" | "image/webp";
+  buffer: Buffer;
+}
+
 export interface CouncilPersistentChatDriver {
-  resume(input: { surfaceId: string; conversationUrl: string; prompt: string; signal?: AbortSignal }): Promise<{ answer: string; conversationUrl: string }>;
-  create(input: { surfaceId: string; prompt: string; signal?: AbortSignal }): Promise<{ answer: string; conversationUrl: string }>;
+  resume(input: { surfaceId: string; conversationUrl: string; prompt: string; attachments?: CouncilPromptAttachment[]; signal?: AbortSignal }): Promise<{ answer: string; conversationUrl: string }>;
+  create(input: { surfaceId: string; prompt: string; attachments?: CouncilPromptAttachment[]; signal?: AbortSignal }): Promise<{ answer: string; conversationUrl: string }>;
+  capture?(input: { surfaceId: string; conversationUrl: string; signal?: AbortSignal }): Promise<{ png: Buffer; conversationUrl: string; health: CouncilObservationHealth; note?: string }>;
 }
 
 export interface CouncilBrowserTransportRunInput {
@@ -25,9 +33,17 @@ export interface CouncilBrowserTransportRunInput {
   conversationUrl?: string;
   prompt: string;
   resurrectionPrompt?: string;
+  attachments?: CouncilPromptAttachment[];
   signal?: AbortSignal;
 }
 export interface CouncilBrowserTransportResult { answer: string; conversationUrl: string; resumed: boolean }
+export interface CouncilBrowserCaptureResult { png: Buffer; conversationUrl: string; health: CouncilObservationHealth; note?: string }
+
+function validAgentId(value: string): string {
+  const id = value.trim();
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(id)) throw new Error("agentId is invalid");
+  return id;
+}
 
 export class CouncilBrowserTransport {
   private readonly control: CouncilPersistentTurnControl;
@@ -40,30 +56,49 @@ export class CouncilBrowserTransport {
     this.options = options;
   }
 
+  private heartbeat(traceId: string): { stop: () => void } {
+    const heartbeatMs = this.options.heartbeatMs ?? 10_000;
+    if (heartbeatMs <= 0) return { stop: () => {} };
+    const timer = setInterval(() => { void this.control.heartbeat({ traceId }).catch(() => {}); }, heartbeatMs);
+    timer.unref?.();
+    return { stop: () => clearInterval(timer) };
+  }
+
   private async runAttempt(input: CouncilBrowserTransportRunInput, bindingKey: string): Promise<CouncilBrowserTransportResult> {
     const traceId = `council_${randomUUID().replaceAll("-", "")}`;
     const lease = await this.control.start({ traceId, bindingKey });
-    let timer: ReturnType<typeof setInterval> | undefined;
-    const heartbeatMs = this.options.heartbeatMs ?? 10_000;
-    if (heartbeatMs > 0) {
-      timer = setInterval(() => { void this.control.heartbeat({ traceId }).catch(() => {}); }, heartbeatMs);
-      timer.unref?.();
-    }
+    const heartbeat = this.heartbeat(traceId);
     try {
       let result: { answer: string; conversationUrl: string };
       let resumed = false;
       if (input.conversationUrl) {
         try {
-          result = await this.driver.resume({ surfaceId: lease.surfaceId, conversationUrl: input.conversationUrl, prompt: input.prompt, signal: input.signal });
+          result = await this.driver.resume({
+            surfaceId: lease.surfaceId,
+            conversationUrl: input.conversationUrl,
+            prompt: input.prompt,
+            ...(input.attachments?.length ? { attachments: input.attachments } : {}),
+            signal: input.signal,
+          });
           resumed = true;
         } catch (error) {
           if (!(error instanceof CouncilConversationUnavailableError)) throw error;
           const resurrection = input.resurrectionPrompt?.trim();
           if (!resurrection) throw error;
-          result = await this.driver.create({ surfaceId: lease.surfaceId, prompt: resurrection, signal: input.signal });
+          result = await this.driver.create({
+            surfaceId: lease.surfaceId,
+            prompt: resurrection,
+            ...(input.attachments?.length ? { attachments: input.attachments } : {}),
+            signal: input.signal,
+          });
         }
       } else {
-        result = await this.driver.create({ surfaceId: lease.surfaceId, prompt: input.resurrectionPrompt?.trim() || input.prompt, signal: input.signal });
+        result = await this.driver.create({
+          surfaceId: lease.surfaceId,
+          prompt: input.resurrectionPrompt?.trim() || input.prompt,
+          ...(input.attachments?.length ? { attachments: input.attachments } : {}),
+          signal: input.signal,
+        });
       }
       await this.control.end({ traceId, status: "completed" });
       return { ...result, resumed };
@@ -72,13 +107,12 @@ export class CouncilBrowserTransport {
       await this.control.end({ traceId, status: aborted ? "aborted" : "failed", message: error instanceof Error ? error.message.slice(0, 500) : String(error).slice(0, 500) }).catch(() => {});
       throw error;
     } finally {
-      if (timer) clearInterval(timer);
+      heartbeat.stop();
     }
   }
 
   async run(input: CouncilBrowserTransportRunInput): Promise<CouncilBrowserTransportResult> {
-    const agentId = input.agentId.trim();
-    if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(agentId)) throw new Error("agentId is invalid");
+    const agentId = validAgentId(input.agentId);
     if (!input.prompt.trim()) throw new Error("prompt is required");
     if (input.signal?.aborted) throw new DOMException("Council browser turn aborted", "AbortError");
     const bindingKey = `agent:${agentId}`;
@@ -92,9 +126,45 @@ export class CouncilBrowserTransport {
     }
   }
 
+  async captureConversation(input: { agentId: string; conversationUrl: string; signal?: AbortSignal }): Promise<CouncilBrowserCaptureResult> {
+    const agentId = validAgentId(input.agentId);
+    if (!this.driver.capture) throw new Error("Council browser driver does not support observation capture");
+    const capture = this.driver.capture.bind(this.driver);
+    if (input.signal?.aborted) throw new DOMException("Council browser capture aborted", "AbortError");
+    const bindingKey = `agent:${agentId}`;
+    let activeTraceId = "";
+    let leased = false;
+    const run = async (): Promise<CouncilBrowserCaptureResult> => {
+      activeTraceId = `observe_${randomUUID().replaceAll("-", "")}`;
+      const lease = await this.control.start({ traceId: activeTraceId, bindingKey });
+      leased = true;
+      const heartbeat = this.heartbeat(activeTraceId);
+      try {
+        const result = await capture({ surfaceId: lease.surfaceId, conversationUrl: input.conversationUrl, signal: input.signal });
+        await this.control.end({ traceId: activeTraceId, status: "completed" });
+        return result;
+      } catch (error) {
+        const aborted = (error instanceof DOMException && error.name === "AbortError") || error instanceof CouncilSurfaceUnavailableError;
+        await this.control.end({ traceId: activeTraceId, status: aborted ? "aborted" : "failed", message: error instanceof Error ? error.message.slice(0, 500) : String(error).slice(0, 500) }).catch(() => {});
+        throw error;
+      } finally {
+        heartbeat.stop();
+      }
+    };
+    try {
+      return await run();
+    } catch (error) {
+      if (!(error instanceof CouncilSurfaceUnavailableError) || !this.control.release) throw error;
+      await this.control.release({ bindingKey });
+      leased = false;
+      return await run();
+    } finally {
+      if (leased && this.control.release) await this.control.release({ bindingKey }).catch(() => false);
+    }
+  }
+
   async release(agentId: string): Promise<boolean> {
-    const id = agentId.trim();
-    if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(id)) throw new Error("agentId is invalid");
+    const id = validAgentId(agentId);
     return this.control.release ? await this.control.release({ bindingKey: `agent:${id}` }) : false;
   }
 }

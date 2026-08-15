@@ -181,6 +181,64 @@ export interface CouncilRuntimeViewState {
   capabilities: Record<CapabilityName, CapabilityState>;
 }
 
+export type CouncilObservationHealthView =
+  | "healthy"
+  | "sleeping"
+  | "busy"
+  | "limited"
+  | "signed-out"
+  | "conversation-missing"
+  | "surface-unavailable"
+  | "connection-error"
+  | "response-stalled"
+  | "unknown";
+
+export interface CouncilSupervisorStatusView {
+  enabled: boolean;
+  managerAgentId: string | null;
+  running: boolean;
+  intervalMs: number;
+  nextRunAt: string | null;
+  lastRunId: string | null;
+  lastError: string | null;
+  scheduler: { active: string | null; queued: number; completed: number; failed: number };
+}
+
+export interface CouncilObservationAgentView {
+  agentId: string;
+  name: string;
+  role: string;
+  capturedAt: string;
+  health: CouncilObservationHealthView;
+  screenshotId?: string;
+  note?: string;
+}
+
+export interface CouncilObservationView {
+  id: string;
+  projectRoomId: string;
+  managerAgentId: string;
+  startedAt: string;
+  completedAt?: string;
+  status: "running" | "completed" | "failed";
+  agents: CouncilObservationAgentView[];
+  managerAnalysis?: string;
+  managerActions?: string[];
+  error?: string;
+}
+
+export interface CouncilObservationSummaryView {
+  id: string;
+  projectRoomId: string;
+  managerAgentId: string;
+  startedAt: string;
+  completedAt?: string;
+  status: "running" | "completed" | "failed";
+  agentCount: number;
+  screenshotCount: number;
+  health: Record<CouncilObservationHealthView, number>;
+}
+
 export interface DoctorCheck { id: string; status: "ok" | "warning" | "error"; message: string; detail?: string }
 export interface DoctorReport { ok: boolean; mode?: "browser-only" | "full"; checks: DoctorCheck[] }
 export interface OperationState { name: string; status: "running" | "completed" | "failed"; message: string }
@@ -236,6 +294,14 @@ export interface LauncherApi {
     lead: { id: string; name: string; role: string; conversationBound: boolean };
     wakeId: string;
   }>;
+  councilSupervisorStatus(): Promise<CouncilSupervisorStatusView>;
+  setCouncilSupervisorManager(agentId: string | null): Promise<CouncilSupervisorStatusView>;
+  runCouncilSupervisorNow(): Promise<CouncilObservationView>;
+  councilObservations(): Promise<CouncilObservationSummaryView[]>;
+  councilObservation(runId: string): Promise<CouncilObservationView>;
+  councilObservationScreenshot(runId: string, screenshotId: string): Promise<string>;
+  deleteCouncilObservation(runId: string): Promise<{ deleted: boolean }>;
+  clearCouncilObservations(): Promise<{ deleted: number }>;
   setMcpStep(step: number): Promise<LauncherState>;
   setAutostart(enabled: boolean): Promise<{ state: LauncherState; supported: boolean; enabled: boolean }>;
   setPreference(key: "keepRunningOnClose" | "showBrowserDuringTurns", value: boolean): Promise<LauncherState>;

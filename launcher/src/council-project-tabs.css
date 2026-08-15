@@ -1,0 +1,56 @@
+.council-project-tabstrip {
+  height: 39px;
+  gap: 2px;
+  padding: 5px 8px 0;
+  align-items: flex-end;
+  background: #191919;
+  scrollbar-width: thin;
+}
+.council-project-tabstrip button {
+  position: relative;
+  display: inline-grid;
+  grid-template-columns: 8px auto auto;
+  align-items: center;
+  gap: 7px;
+  min-width: 118px;
+  max-width: 210px;
+  height: 30px;
+  padding: 0 10px;
+  border: 1px solid transparent;
+  border-bottom: 0;
+  border-radius: 9px 9px 0 0;
+  background: #202020;
+  color: #a0a0a0;
+}
+.council-project-tabstrip button:hover:not(:disabled) { background: #292929; color: #ddd; }
+.council-project-tabstrip button.active {
+  z-index: 1;
+  border-color: #343434;
+  background: #2b2b2b;
+  color: #f0f0f0;
+}
+.council-project-tabstrip button.parked { opacity: .72; background: #1d1d1d; }
+.council-project-tabstrip button:disabled { cursor: default; }
+.council-project-tabstrip button > i {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: #696969;
+}
+.council-project-tabstrip button > i.tab-home { background: #8ab4ff; }
+.council-project-tabstrip button > i.runtime-active { background: #59d69a; box-shadow: 0 0 0 3px rgba(89,214,154,.1); }
+.council-project-tabstrip button > i.runtime-queued { background: #f1bd61; }
+.council-project-tabstrip button > i.runtime-failed { background: #f07f79; }
+.council-project-tabstrip button > i.runtime-sleeping { background: #777; }
+.council-project-tabstrip button > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 10px;
+}
+.council-project-tabstrip button > small {
+  color: #686868;
+  font-size: 8px;
+  text-transform: uppercase;
+}
+.council-project-tabstrip button.active > small { color: #969696; }

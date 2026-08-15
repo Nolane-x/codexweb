@@ -1,6 +1,6 @@
 import type { CouncilAgentRegistry } from "./agent-registry";
 import { CouncilAgentManager } from "./agent-manager";
-import type { CouncilBrowserTransport } from "./browser-transport";
+import type { CouncilBrowserCaptureResult, CouncilBrowserTransport, CouncilPromptAttachment } from "./browser-transport";
 import type { ParsedCouncilActionFooter } from "./browser-actions";
 import { assertCouncilDecisionGate } from "./decision-gate";
 import { COUNCIL_PERMISSIONS, type CouncilPermission, type ManagedAgentRecord, type ManagedAgentStateStore } from "./managed-agent-state";
@@ -8,6 +8,7 @@ import type { ManagedCouncilProject, ManagedProjectStateStore } from "./managed-
 import type { RepoWorkspaceBinding } from "./repo-workspace";
 import type { CouncilStore } from "./store";
 import type { CouncilWakeEvent } from "./types";
+import { CouncilWorkScheduler, type CouncilWorkSchedulerSnapshot } from "./work-scheduler";
 
 export interface CouncilManagedRuntimeOptions {
   council: CouncilStore;
@@ -16,6 +17,7 @@ export interface CouncilManagedRuntimeOptions {
   registry: CouncilAgentRegistry;
   transport: CouncilBrowserTransport;
   parseAnswer: (text: string) => ParsedCouncilActionFooter;
+  scheduler?: CouncilWorkScheduler;
 }
 
 export interface PublicManagedAgent extends Omit<ManagedAgentRecord, "conversationUrl" | "checkpoint"> {
@@ -31,6 +33,7 @@ export class CouncilManagedRuntime {
   private readonly registry: CouncilAgentRegistry;
   private readonly transport: CouncilBrowserTransport;
   private readonly parseAnswer: (text: string) => ParsedCouncilActionFooter;
+  private readonly scheduler: CouncilWorkScheduler;
   private manager?: CouncilAgentManager;
   private managerProjectUpdatedAt?: string;
 
@@ -41,9 +44,11 @@ export class CouncilManagedRuntime {
     this.registry = options.registry;
     this.transport = options.transport;
     this.parseAnswer = options.parseAnswer;
+    this.scheduler = options.scheduler ?? new CouncilWorkScheduler();
   }
 
   activeProject(): ManagedCouncilProject | undefined { return this.project.get(); }
+  schedulerSnapshot(): CouncilWorkSchedulerSnapshot { return this.scheduler.snapshot(); }
 
   publicAgents(): PublicManagedAgent[] {
     return this.managed.list().map(agent => {
@@ -58,9 +63,11 @@ export class CouncilManagedRuntime {
     });
   }
 
+  supervisorAgents(): ManagedAgentRecord[] { return this.managed.list(); }
+
   authorizeManaged(agentId: string, permission: CouncilPermission): void {
     const agent = this.managed.get(agentId);
-    if (!agent) return; // legacy/unmanaged Council participants retain compatibility behavior.
+    if (!agent) return;
     if (!agent.permissions.includes(permission)) throw new Error(`Council agent ${agent.id} requires ${permission} permission`);
   }
 
@@ -143,6 +150,21 @@ export class CouncilManagedRuntime {
     return true;
   }
 
+  async captureAgent(agentId: string): Promise<CouncilBrowserCaptureResult> {
+    const agent = this.managed.get(agentId);
+    if (!agent) throw new Error(`managed agent does not exist: ${agentId}`);
+    if (!agent.conversationUrl) throw new Error(`managed agent ${agentId} has no persistent ChatGPT conversation`);
+    return await this.scheduler.enqueue(`observe:${agent.id}`, async () => {
+      return await this.transport.captureConversation({ agentId: agent.id, conversationUrl: agent.conversationUrl! });
+    }, { attempts: 3, baseDelayMs: 1_000, maxDelayMs: 4_000, retryable: error => error instanceof Error && /capacity|active turn|surface unavailable/i.test(error.message) });
+  }
+
+  async runManagerObservation(agentId: string, prompt: string, attachments: CouncilPromptAttachment[]): Promise<string> {
+    const project = this.requireProject();
+    if (!this.managed.get(agentId)) throw new Error(`managed manager does not exist: ${agentId}`);
+    return await this.managerFor(project).runManagerObservation(agentId, prompt, attachments);
+  }
+
   private requireProject(): ManagedCouncilProject {
     const project = this.project.get();
     if (!project) throw new Error("No managed Council project is active; bootstrap the first lead with council_start_project");
@@ -159,6 +181,7 @@ export class CouncilManagedRuntime {
         parseAnswer: this.parseAnswer,
         projectMission: project.mission,
         defaultRoomId: project.roomId,
+        scheduler: this.scheduler,
       });
       this.managerProjectUpdatedAt = project.updatedAt;
     }

@@ -8,7 +8,7 @@ import { normalizeCouncilWakeStatus } from "./work-operations";
 
 export const COUNCIL_HTTP_HOST = "127.0.0.1";
 export const COUNCIL_HTTP_DEFAULT_PORT = 17_842;
-const OWNER_BODY_LIMIT = 16 * 1024;
+const OWNER_BODY_LIMIT = 64 * 1024;
 const MAX_SYNC_CURSOR_BYTES = 1_024;
 const DEFAULT_SYNC_WAIT_MS = 15_000;
 const MAX_SYNC_WAIT_MS = 25_000;
@@ -38,9 +38,21 @@ export interface CouncilSyncSnapshotEnvelope {
   generatedAt: string;
 }
 
+export interface CouncilOwnerSupervisorApi {
+  status: () => unknown;
+  setManager: (agentId?: string) => unknown;
+  runNow: () => Promise<unknown>;
+  history: () => unknown;
+  observation: (runId: string) => unknown;
+  screenshot: (runId: string, screenshotId: string) => Buffer | undefined;
+  deleteObservation: (runId: string) => boolean;
+  clearHistory: () => number;
+}
+
 export interface CouncilOwnerApi {
   token: () => string | undefined;
   startLead: (input: { conversationUrl: string; projectName: string }) => Promise<unknown>;
+  supervisor?: CouncilOwnerSupervisorApi;
 }
 
 function canonicalPublicWake(wake: CouncilWakeEvent): CouncilWakeEvent {
@@ -120,14 +132,27 @@ function decodeCursor(value: string | null): { epoch: string; revision: number }
   } catch { return undefined; }
 }
 
-async function parseOwnerBody(request: Request): Promise<{ conversationUrl: string; projectName: string }> {
+async function parseOwnerJson(request: Request): Promise<Record<string, unknown>> {
   const length = Number(request.headers.get("content-length") ?? "0");
   if (Number.isFinite(length) && length > OWNER_BODY_LIMIT) throw new Error("owner request is too large");
   const text = await request.text();
   if (Buffer.byteLength(text, "utf8") > OWNER_BODY_LIMIT) throw new Error("owner request is too large");
-  const body = JSON.parse(text) as Record<string, unknown>;
-  if (typeof body.conversation_url !== "string" || typeof body.project_name !== "string") throw new Error("owner request is invalid");
-  return { conversationUrl: body.conversation_url, projectName: body.project_name };
+  if (!text) return {};
+  const body = JSON.parse(text) as unknown;
+  if (!body || typeof body !== "object" || Array.isArray(body)) throw new Error("owner request is invalid");
+  return body as Record<string, unknown>;
+}
+
+function ownerString(body: Record<string, unknown>, key: string, max = 160): string {
+  const value = body[key];
+  if (typeof value !== "string" || !value.trim() || value.length > max) throw new Error(`${key} is invalid`);
+  return value.trim();
+}
+
+function ownerId(body: Record<string, unknown>, key: string): string {
+  const value = ownerString(body, key, 128);
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(value)) throw new Error(`${key} is invalid`);
+  return value;
 }
 
 export function startCouncilHttpServer(
@@ -162,6 +187,14 @@ export function startCouncilHttpServer(
     reason: { code: "RESYNC_REQUIRED" },
   }, { status: 409, headers: responseHeaders(origin) });
 
+  const ownerAuthorized = (request: Request): boolean => {
+    if (request.headers.has("origin")) return false;
+    const token = options.owner?.token();
+    return Boolean(token && ownerBearerMatches(token!, request.headers.get("authorization")));
+  };
+
+  const ownerJson = (result: unknown, status = 200) => Response.json({ ok: status < 400, ...(status < 400 ? { result } : { error: result }) }, { status, headers: responseHeaders() });
+
   try {
     return Bun.serve({
       hostname: COUNCIL_HTTP_HOST,
@@ -169,20 +202,47 @@ export function startCouncilHttpServer(
       async fetch(request) {
         const url = new URL(request.url);
 
-        if (request.method === "POST" && url.pathname === "/api/owner/start-lead") {
+        if (url.pathname.startsWith("/api/owner/")) {
           if (request.headers.has("origin")) return new Response("Forbidden origin", { status: 403, headers: responseHeaders(undefined, "text/plain; charset=utf-8") });
-          const token = options.owner?.token();
-          if (!token || !ownerBearerMatches(token, request.headers.get("authorization"))) {
-            return new Response("Unauthorized", { status: 401, headers: responseHeaders(undefined, "text/plain; charset=utf-8") });
-          }
+          if (!ownerAuthorized(request)) return new Response("Unauthorized", { status: 401, headers: responseHeaders(undefined, "text/plain; charset=utf-8") });
+          if (request.method !== "POST") return new Response("Method not allowed", { status: 405, headers: responseHeaders(undefined, "text/plain; charset=utf-8") });
           try {
-            const input = await parseOwnerBody(request);
-            const result = await options.owner!.startLead(input);
-            return Response.json({ ok: true, result }, { headers: responseHeaders() });
+            const body = await parseOwnerJson(request);
+            if (url.pathname === "/api/owner/start-lead") {
+              const conversationUrl = ownerString(body, "conversation_url", 1_000);
+              const projectName = ownerString(body, "project_name", 160);
+              return ownerJson(await options.owner!.startLead({ conversationUrl, projectName }));
+            }
+            const supervisor = options.owner?.supervisor;
+            if (!supervisor) return ownerJson("Council supervisor is unavailable", 503);
+            if (url.pathname === "/api/owner/supervisor/status") return ownerJson(supervisor.status());
+            if (url.pathname === "/api/owner/supervisor/manager") {
+              const raw = body.agent_id;
+              if (raw !== null && raw !== undefined && typeof raw !== "string") throw new Error("agent_id is invalid");
+              const agentId = typeof raw === "string" && raw.trim() ? ownerId(body, "agent_id") : undefined;
+              return ownerJson(supervisor.setManager(agentId));
+            }
+            if (url.pathname === "/api/owner/supervisor/run") return ownerJson(await supervisor.runNow());
+            if (url.pathname === "/api/owner/observations/list") return ownerJson(supervisor.history());
+            if (url.pathname === "/api/owner/observations/read") {
+              const value = supervisor.observation(ownerId(body, "run_id"));
+              return value ? ownerJson(value) : ownerJson("Observation does not exist", 404);
+            }
+            if (url.pathname === "/api/owner/observations/screenshot") {
+              const runId = ownerId(body, "run_id");
+              const screenshotId = ownerString(body, "screenshot_id", 180);
+              if (!/^[A-Za-z0-9._-]{8,160}\.png$/.test(screenshotId)) throw new Error("screenshot_id is invalid");
+              const png = supervisor.screenshot(runId, screenshotId);
+              if (!png) return ownerJson("Observation screenshot does not exist", 404);
+              return new Response(Uint8Array.from(png), { status: 200, headers: responseHeaders(undefined, "image/png") });
+            }
+            if (url.pathname === "/api/owner/observations/delete") return ownerJson({ deleted: supervisor.deleteObservation(ownerId(body, "run_id")) });
+            if (url.pathname === "/api/owner/observations/clear") return ownerJson({ deleted: supervisor.clearHistory() });
+            return ownerJson("Unknown owner operation", 404);
           } catch (error) {
             const message = error instanceof Error ? error.message : String(error);
-            options.onError?.(`owner start-lead failed: ${message}`);
-            return Response.json({ ok: false, error: message }, { status: 400, headers: responseHeaders() });
+            options.onError?.(`owner request failed: ${message}`);
+            return ownerJson(message, 400);
           }
         }
 
@@ -194,26 +254,17 @@ export function startCouncilHttpServer(
           return new Response(null, { status: 204, headers: { ...responseHeaders(origin), "access-control-allow-methods": "GET, OPTIONS", "access-control-allow-headers": "content-type" } });
         }
         if (request.method === "GET" && url.pathname === "/health") return Response.json({ ok: true, product: "codexweb-council", port }, { headers: responseHeaders(origin) });
-        if (request.method === "GET" && url.pathname === "/api/state") {
-          return Response.json(buildCouncilPublicSnapshot(store, managedView()), { headers: responseHeaders(origin) });
-        }
-        if (request.method === "GET" && url.pathname === "/api/sync/snapshot") {
-          return Response.json(syncSnapshot(), { headers: responseHeaders(origin) });
-        }
+        if (request.method === "GET" && url.pathname === "/api/state") return Response.json(buildCouncilPublicSnapshot(store, managedView()), { headers: responseHeaders(origin) });
+        if (request.method === "GET" && url.pathname === "/api/sync/snapshot") return Response.json(syncSnapshot(), { headers: responseHeaders(origin) });
         if (request.method === "GET" && url.pathname === "/api/sync/next") {
           const cursor = decodeCursor(url.searchParams.get("after"));
           const currentRevision = store.currentRevision();
           if (!cursor || cursor.epoch !== syncEpoch || cursor.revision > currentRevision) return resyncRequired(origin);
-
-          if (cursor.revision < currentRevision) {
-            return Response.json(syncSnapshot(), { headers: responseHeaders(origin) });
-          }
+          if (cursor.revision < currentRevision) return Response.json(syncSnapshot(), { headers: responseHeaders(origin) });
 
           let waitMs: number;
           try { waitMs = syncWaitMilliseconds(url); }
-          catch {
-            return Response.json({ schemaVersion: 1, type: "invalid-request", reason: { code: "INVALID_WAIT" } }, { status: 400, headers: responseHeaders(origin) });
-          }
+          catch { return Response.json({ schemaVersion: 1, type: "invalid-request", reason: { code: "INVALID_WAIT" } }, { status: 400, headers: responseHeaders(origin) }); }
 
           const changed = await new Promise<boolean>(resolve => {
             let settled = false;

@@ -27,6 +27,29 @@ describe("CouncilBrowserTransport", () => {
     expect(events).toEqual(["start:agent:bob:1", "end:completed"]);
   });
 
+  test("forwards screenshot attachments to a manager turn", async () => {
+    const { events, control } = fixture();
+    const image = Buffer.from("png");
+    const driver = {
+      async resume(input: { attachments?: Array<{ name: string; buffer: Buffer }> }) {
+        expect(input.attachments).toHaveLength(1);
+        expect(input.attachments?.[0].name).toBe("critic.png");
+        expect(input.attachments?.[0].buffer).toEqual(image);
+        return { answer: "managed", conversationUrl: "https://chatgpt.com/c/lead" };
+      },
+      async create() { throw new Error("must not create"); },
+    };
+    const transport = new CouncilBrowserTransport(control, driver as any, { heartbeatMs: 60_000 });
+    const result = await transport.run({
+      agentId: "lead",
+      conversationUrl: "https://chatgpt.com/c/lead",
+      prompt: "inspect",
+      attachments: [{ name: "critic.png", mimeType: "image/png", buffer: image }],
+    });
+    expect(result.answer).toBe("managed");
+    expect(events).toEqual(["start:agent:lead:1", "end:completed"]);
+  });
+
   test("falls back to new conversation only for explicit unavailable evidence", async () => {
     const { events, control } = fixture();
     const driver = {
@@ -38,6 +61,26 @@ describe("CouncilBrowserTransport", () => {
     expect(result.resumed).toBe(false);
     expect(result.conversationUrl).toBe("https://chatgpt.com/c/new");
     expect(events).toEqual(["start:agent:bob:1", "end:completed"]);
+  });
+
+  test("captures a conversation read-only and releases its persistent browser binding", async () => {
+    const { events, control } = fixture();
+    let sends = 0;
+    const driver = {
+      async resume() { sends += 1; throw new Error("capture must not send"); },
+      async create() { sends += 1; throw new Error("capture must not create"); },
+      async capture(input: { surfaceId: string; conversationUrl: string }) {
+        expect(input.surfaceId).toBe("surface-1");
+        expect(input.conversationUrl).toBe("https://chatgpt.com/c/bob");
+        return { png: Buffer.from("png"), conversationUrl: input.conversationUrl, health: "healthy" as const };
+      },
+    };
+    const transport = new CouncilBrowserTransport(control, driver, { heartbeatMs: 60_000 });
+    const result = await transport.captureConversation({ agentId: "bob", conversationUrl: "https://chatgpt.com/c/bob" });
+    expect(result.health).toBe("healthy");
+    expect(result.png).toEqual(Buffer.from("png"));
+    expect(sends).toBe(0);
+    expect(events).toEqual(["start:agent:bob:1", "end:completed", "release:agent:bob"]);
   });
 
   test("releases and reacquires exactly once when the leased browser surface is unavailable before submit", async () => {

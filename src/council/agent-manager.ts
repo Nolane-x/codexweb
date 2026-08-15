@@ -1,13 +1,18 @@
 import { randomUUID } from "node:crypto";
 import type { CouncilBrowserAction, ParsedCouncilActionFooter } from "./browser-actions";
 import type { CouncilAgentRegistry } from "./agent-registry";
-import type { CouncilBrowserTransport } from "./browser-transport";
+import type { CouncilBrowserTransport, CouncilPromptAttachment } from "./browser-transport";
 import type { CouncilPermission, ManagedAgentRecord, ManagedAgentStateStore } from "./managed-agent-state";
 import { assertBrowserActionPermission } from "./policy";
 import { buildAgentBootstrapPrompt, buildAgentResurrectionPrompt } from "./resurrection";
 import type { CouncilState, CouncilWakeEvent } from "./types";
+import { CouncilWorkScheduler } from "./work-scheduler";
 
 const MANAGED_PRESENCE_HEARTBEAT_MS = 20_000;
+
+class CouncilAgentCapacityError extends Error {
+  constructor(message: string) { super(message); this.name = "CouncilAgentCapacityError"; }
+}
 
 interface CouncilStoreLike {
   snapshot(): CouncilState;
@@ -42,6 +47,7 @@ export interface CouncilAgentManagerOptions {
   projectMission: string;
   defaultRoomId: string;
   maxDepth?: number;
+  scheduler?: CouncilWorkScheduler;
 }
 
 export class CouncilAgentManager {
@@ -53,6 +59,7 @@ export class CouncilAgentManager {
   private readonly projectMission: string;
   private readonly defaultRoomId: string;
   private readonly maxDepth: number;
+  private readonly scheduler: CouncilWorkScheduler;
   private readonly tails = new Map<string, Promise<unknown>>();
 
   constructor(options: CouncilAgentManagerOptions) {
@@ -64,6 +71,7 @@ export class CouncilAgentManager {
     this.projectMission = options.projectMission.trim();
     this.defaultRoomId = options.defaultRoomId.trim();
     this.maxDepth = options.maxDepth ?? 8;
+    this.scheduler = options.scheduler ?? new CouncilWorkScheduler();
     if (!this.projectMission) throw new Error("projectMission is required");
     if (!this.defaultRoomId) throw new Error("defaultRoomId is required");
     for (const agent of this.managed.list()) {
@@ -95,9 +103,6 @@ export class CouncilAgentManager {
     const child = this.managed.upsert({ id, name: input.name, role: input.role, mandate: input.mandate, permissions: requested });
     this.registry.register({ id: child.id, name: child.name, role: child.role, mandate: child.mandate });
     this.ensureCouncilAgent(child);
-    const lease = this.registry.lease(child.id);
-    if (lease.status === "queued") return child;
-    this.registry.release(child.id);
     const bootstrap = buildAgentBootstrapPrompt(child, { projectMission: this.projectMission, roomId });
     await this.runManagedAgent(child.id, bootstrap, roomId, depth, bootstrap);
     return this.requireManaged(child.id);
@@ -148,20 +153,26 @@ export class CouncilAgentManager {
         'Respond according to your role and end with one valid <COUNCIL_ACTIONS version="1"> block.',
       ].join("\n");
       try {
-        await this.runManagedAgent(
-          target.id,
-          delta,
-          wake.roomId,
-          depth + 1,
-          full,
-          () => { this.council.updateWake(wake.id, "target-running"); },
-        );
+        await this.runManagedAgent(target.id, delta, wake.roomId, depth + 1, full, undefined, () => {
+          this.council.updateWake(wake.id, "target-running");
+        });
         this.council.updateWake(wake.id, "replied");
       } catch (error) {
-        this.council.updateWake(wake.id, "failed", "Managed wake failed; inspect local runtime logs");
+        this.council.updateWake(wake.id, "failed", "Managed wake failed after bounded sequential retry; inspect local runtime logs");
         throw error;
       }
     });
+  }
+
+  async runManagerObservation(agentId: string, prompt: string, attachments: CouncilPromptAttachment[]): Promise<string> {
+    const agent = this.requireManaged(agentId);
+    return await this.runManagedAgent(agent.id, prompt, this.defaultRoomId, 0, this.liveResurrectionPrompt(agent, this.defaultRoomId), attachments);
+  }
+
+  private retryableCapacity(error: unknown): boolean {
+    if (error instanceof CouncilAgentCapacityError) return true;
+    if (!(error instanceof Error)) return false;
+    return /capacity is full|all browser surfaces are busy|already has an active turn|already has 5 browser tabs/i.test(error.message);
   }
 
   private async runManagedAgent(
@@ -170,53 +181,66 @@ export class CouncilAgentManager {
     roomId: string,
     depth: number,
     resurrectionPrompt?: string,
+    attachments?: CouncilPromptAttachment[],
     onRunning?: () => void,
-  ): Promise<void> {
+  ): Promise<string> {
     this.assertDepth(depth);
-    const agent = this.requireManaged(agentId);
-    const lease = this.registry.lease(agentId);
-    if (lease.status === "queued") throw new Error(`Council agent ${agentId} is queued because all browser surfaces are busy`);
-    let presenceHeartbeat: ReturnType<typeof setInterval> | undefined;
-    let effects: DeferredEffect[] = [];
-    try {
-      try { this.council.touchAgentPresence(agentId); }
-      catch { /* Presence is observability and must not strand a leased browser surface. */ }
-      presenceHeartbeat = setInterval(() => {
-        try { this.council.touchAgentPresence(agentId); }
-        catch { /* Presence is observability; heartbeat failure must not abort the active browser turn. */ }
-      }, MANAGED_PRESENCE_HEARTBEAT_MS);
-      presenceHeartbeat.unref?.();
-      onRunning?.();
-      let result = await this.transport.run({
-        agentId,
-        conversationUrl: agent.conversationUrl,
-        prompt,
-        resurrectionPrompt: resurrectionPrompt || this.liveResurrectionPrompt(agent, roomId),
-      });
-      this.managed.bindConversation(agentId, result.conversationUrl);
-      this.registry.bindConversation(agentId, { surfaceId: lease.surfaceId!, conversationUrl: result.conversationUrl });
-      let parsed: ParsedCouncilActionFooter;
+    const outcome = await this.scheduler.enqueue(`agent:${agentId}`, async () => {
+      const agent = this.requireManaged(agentId);
+      const lease = this.registry.lease(agentId);
+      if (lease.status === "queued") throw new CouncilAgentCapacityError(`Council agent ${agentId} is queued because all browser surfaces are busy`);
+      let presenceHeartbeat: ReturnType<typeof setInterval> | undefined;
+      let effects: DeferredEffect[] = [];
+      let finalAnswer = "";
       try {
-        parsed = this.parseAnswer(result.answer);
-      } catch (firstError) {
-        const correction = [
-          "Your previous visible answer could not be routed because its terminal Council action block was invalid.",
-          "Do not repeat hidden reasoning. Return a concise public answer and exactly one valid <COUNCIL_ACTIONS version=\"1\"> JSON block.",
-          `Parser error: ${firstError instanceof Error ? firstError.message : "invalid protocol"}`,
-        ].join("\n");
-        result = await this.transport.run({ agentId, conversationUrl: result.conversationUrl, prompt: correction, resurrectionPrompt: resurrectionPrompt || prompt });
+        try { this.council.touchAgentPresence(agentId); }
+        catch { /* Presence is observability and must not strand a leased browser surface. */ }
+        presenceHeartbeat = setInterval(() => {
+          try { this.council.touchAgentPresence(agentId); }
+          catch { /* Presence is observability; heartbeat failure must not abort the active browser turn. */ }
+        }, MANAGED_PRESENCE_HEARTBEAT_MS);
+        presenceHeartbeat.unref?.();
+        onRunning?.();
+        let result = await this.transport.run({
+          agentId,
+          conversationUrl: agent.conversationUrl,
+          prompt,
+          resurrectionPrompt: resurrectionPrompt || this.liveResurrectionPrompt(agent, roomId),
+          ...(attachments?.length ? { attachments } : {}),
+        });
         this.managed.bindConversation(agentId, result.conversationUrl);
-        parsed = this.parseAnswer(result.answer);
+        this.registry.bindConversation(agentId, { surfaceId: lease.surfaceId!, conversationUrl: result.conversationUrl });
+        let parsed: ParsedCouncilActionFooter;
+        try {
+          parsed = this.parseAnswer(result.answer);
+        } catch (firstError) {
+          const correction = [
+            "Your previous visible answer could not be routed because its terminal Council action block was invalid.",
+            "Do not repeat hidden reasoning. Return a concise public answer and exactly one valid <COUNCIL_ACTIONS version=\"1\"> JSON block.",
+            `Parser error: ${firstError instanceof Error ? firstError.message : "invalid protocol"}`,
+          ].join("\n");
+          result = await this.transport.run({ agentId, conversationUrl: result.conversationUrl, prompt: correction, resurrectionPrompt: resurrectionPrompt || prompt });
+          this.managed.bindConversation(agentId, result.conversationUrl);
+          parsed = this.parseAnswer(result.answer);
+        }
+        finalAnswer = parsed.visibleText.trim() || result.answer.trim();
+        effects = this.applyActions(agentId, parsed, roomId);
+        try { this.council.touchAgentPresence(agentId); }
+        catch { /* A successful Council turn remains successful if presence telemetry cannot be renewed. */ }
+      } finally {
+        if (presenceHeartbeat) clearInterval(presenceHeartbeat);
+        await this.transport.release(agentId).catch(() => false);
+        this.registry.release(agentId);
       }
-      effects = this.applyActions(agentId, parsed, roomId);
-      try { this.council.touchAgentPresence(agentId); }
-      catch { /* A successful Council turn remains successful if presence telemetry cannot be renewed. */ }
-    } finally {
-      if (presenceHeartbeat) clearInterval(presenceHeartbeat);
-      await this.transport.release(agentId).catch(() => false);
-      this.registry.release(agentId);
-    }
-    await this.executeEffects(effects, depth);
+      return { effects, finalAnswer };
+    }, {
+      attempts: 6,
+      baseDelayMs: 750,
+      maxDelayMs: 8_000,
+      retryable: error => this.retryableCapacity(error),
+    });
+    await this.executeEffects(outcome.effects, depth);
+    return outcome.finalAnswer;
   }
 
   private applyActions(sourceId: string, parsed: ParsedCouncilActionFooter, defaultRoomId: string): DeferredEffect[] {

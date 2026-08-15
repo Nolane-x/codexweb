@@ -11,9 +11,11 @@ import { ManagedAgentStateStore } from "./managed-agent-state";
 import { ManagedProjectStateStore } from "./managed-project-state";
 import { CouncilManagedRuntime } from "./managed-runtime";
 import { runCouncilMcpServer } from "./mcp-server";
+import { CouncilObservationStore } from "./observation-store";
 import { issueCouncilOwnerControl } from "./owner-control";
 import { PlaywrightCouncilChatDriver } from "./playwright-council-driver";
 import { CouncilStore } from "./store";
+import { CouncilSupervisor } from "./supervisor";
 import { CouncilWakeEngine } from "./wake-engine";
 
 function takeOption(args: string[], name: string): string | undefined {
@@ -38,6 +40,8 @@ export async function runCouncilMcpMain(args: string[]): Promise<void> {
   let managedRuntime: CouncilManagedRuntime | undefined;
   let managedState: ManagedAgentStateStore | undefined;
   let fallbackWake: CouncilWakeEngine | undefined;
+  let observations: CouncilObservationStore | undefined;
+  let supervisor: CouncilSupervisor | undefined;
   try {
     const config = loadConfig();
     if (config.browserHost === "launcher" && config.browserHostDescriptorPath) {
@@ -51,6 +55,13 @@ export async function runCouncilMcpMain(args: string[]): Promise<void> {
         registry: new CouncilAgentRegistry(),
         transport,
         parseAnswer: parseCouncilActionFooter,
+      });
+      observations = new CouncilObservationStore(join(councilDir, "observations"));
+      supervisor = new CouncilSupervisor({
+        runtime: managedRuntime,
+        council: store,
+        observations,
+        statePath: join(councilDir, "supervisor.json"),
       });
     }
     if (config.mode === "full") fallbackWake = new CouncilWakeEngine(store, config);
@@ -97,6 +108,18 @@ export async function runCouncilMcpMain(args: string[]): Promise<void> {
             wakeId: wake.id,
           };
         },
+        ...(supervisor ? {
+          supervisor: {
+            status: () => supervisor!.status(),
+            setManager: (agentId?: string) => supervisor!.setManager(agentId),
+            runNow: () => supervisor!.runNow(),
+            history: () => supervisor!.history(),
+            observation: (runId: string) => supervisor!.observation(runId),
+            screenshot: (runId: string, screenshotId: string) => supervisor!.screenshot(runId, screenshotId),
+            deleteObservation: (runId: string) => supervisor!.deleteObservation(runId),
+            clearHistory: () => supervisor!.clearHistory(),
+          },
+        } : {}),
       },
     } : {}),
   });
@@ -110,6 +133,7 @@ export async function runCouncilMcpMain(args: string[]): Promise<void> {
       if (typeof ownerPort !== "number" || !Number.isInteger(ownerPort)) throw new Error("Council owner server did not expose a valid loopback port");
       const descriptor = issueCouncilOwnerControl(ownerDescriptorPath, ownerPort);
       ownerToken = descriptor.token;
+      supervisor?.start();
     } catch (error) {
       httpServer.stop(true);
       throw error;
@@ -118,8 +142,14 @@ export async function runCouncilMcpMain(args: string[]): Promise<void> {
 
   const wakeDelivery = managedRuntime || fallbackWake ? new HybridCouncilWakeDelivery(store, managedRuntime, fallbackWake) : undefined;
   try {
-    await runCouncilMcpServer({ store, ...(wakeDelivery ? { wakeDelivery } : {}), ...(managedRuntime ? { managedRuntime } : {}) });
+    await runCouncilMcpServer({
+      store,
+      ...(wakeDelivery ? { wakeDelivery } : {}),
+      ...(managedRuntime ? { managedRuntime } : {}),
+      ...(observations ? { observations } : {}),
+    });
   } finally {
+    supervisor?.stop();
     ownerToken = undefined;
     rmSync(ownerDescriptorPath, { force: true });
     httpServer?.stop(true);
