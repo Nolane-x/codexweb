@@ -140,7 +140,7 @@ export function CouncilSupervisorPanel() {
 
           <div className="council-history-head">
             <div><strong>Retained observations</strong><small>Oldest data is pruned automatically; retained runs can be read by Council AI as bounded memory.</small></div>
-            <button type="button" disabled={busy || history.length === 0} onClick={() => void act(async () => { if (api) await api.clearCouncilObservations(); setSelectedRun(null); })}>Clear all</button>
+            <button type="button" disabled={busy || status?.running || history.length === 0} onClick={() => void act(async () => { if (api) await api.clearCouncilObservations(); setSelectedRun(null); })}>Clear all</button>
           </div>
 
           <div className="council-history-list">
@@ -150,7 +150,7 @@ export function CouncilSupervisorPanel() {
                   <span><strong>{formatTime(run.completedAt ?? run.startedAt)}</strong><small>{run.agentCount} agents · {run.screenshotCount} captures</small></span>
                   <em className={`status-${run.status}`}>{run.status}</em>
                 </button>
-                <button className="council-history-delete" type="button" disabled={busy} onClick={() => void act(async () => { if (!api) return; await api.deleteCouncilObservation(run.id); if (selectedRun?.id === run.id) setSelectedRun(null); })}>×</button>
+                <button className="council-history-delete" type="button" disabled={busy || status?.running} onClick={() => void act(async () => { if (!api) return; await api.deleteCouncilObservation(run.id); if (selectedRun?.id === run.id) setSelectedRun(null); })}>×</button>
               </article>
             ))}
             {!history.length ? <p className="council-supervisor-empty">No supervisor observations yet.</p> : null}
