@@ -1,9 +1,10 @@
 {
   "name": "codex-web-gpt-launcher",
-  "version": "3.3.0",
+  "version": "3.3.1",
   "private": true,
   "description": "Desktop control center for CodexWeb Council",
   "author": "miuuyy / Nolane-x",
+  "desktopName": "codexweb-council.desktop",
   "type": "module",
   "main": "electron/main-council.cjs",
   "scripts": {
@@ -30,7 +31,7 @@
     "extraResources":[{"from":"build/runtime","to":"runtime"}],
     "mac":{"category":"public.app-category.developer-tools","icon":"assets/icon.png","minimumSystemVersion":"13.0","hardenedRuntime":true,"target":["dmg","zip"]},
     "win":{"icon":"assets/icon.ico","target":["nsis"]},
-    "linux":{"category":"Development","icon":"assets/icon.png","target":["AppImage"]},
+    "linux":{"category":"Development","icon":"assets/icon.png","target":["AppImage"],"syncDesktopName":true},
     "nsis":{"oneClick":true,"perMachine":false,"allowElevation":false,"createDesktopShortcut":true,"createStartMenuShortcut":true,"runAfterFinish":false}
   }
 }
