@@ -17,11 +17,12 @@ describe("CouncilAutonomyWorkStore", () => {
     const fx = fixture();
     try {
       const store = fx.make();
-      const first = store.enqueue({ kind: "wake", projectRoomId: "r", targetAgentId: "bob", taskId: "t1", dedupeKey: "wake:r:bob:task:t1", priority: 80, maxAttempts: 4, reason: "task assigned" });
-      const second = store.enqueue({ kind: "wake", projectRoomId: "r", targetAgentId: "bob", taskId: "t1", dedupeKey: "wake:r:bob:task:t1", priority: 90, maxAttempts: 4, reason: "still assigned" });
+      const first = store.enqueue({ kind: "wake", projectRoomId: "r", targetAgentId: "bob", taskId: "t1", dedupeKey: "wake:r:bob:task:t1", priority: 80, maxAttempts: 4, correlationDepth: 3, reason: "task assigned" });
+      const second = store.enqueue({ kind: "wake", projectRoomId: "r", targetAgentId: "bob", taskId: "t1", dedupeKey: "wake:r:bob:task:t1", priority: 90, maxAttempts: 4, correlationDepth: 4, reason: "still assigned" });
       expect(second.id).toBe(first.id);
       expect(store.snapshot().items).toHaveLength(1);
       expect(store.snapshot().items[0]!.priority).toBe(90);
+      expect(store.snapshot().items[0]!.correlationDepth).toBe(3);
       expect(store.snapshot().items[0]!.reasons).toEqual(["task assigned", "still assigned"]);
       expect(fx.make().snapshot().items[0]!.id).toBe(first.id);
     } finally { rmSync(fx.root, { recursive: true, force: true }); }
@@ -65,6 +66,19 @@ describe("CouncilAutonomyWorkStore", () => {
       const recovered = store.snapshot().items.find(item => item.id === uncertain.id)!;
       expect(recovered.state).toBe("uncertain");
       expect(recovered.failureCode).toBe("SUBMISSION_UNCERTAIN");
+    } finally { rmSync(fx.root, { recursive: true, force: true }); }
+  });
+
+  test("breaker deferral does not consume a delivery attempt", () => {
+    const fx = fixture();
+    try {
+      const store = fx.make();
+      const item = store.enqueue({ kind: "wake", projectRoomId: "r", targetAgentId: "bob", dedupeKey: "defer", priority: 70 });
+      expect(store.leaseNext("runner")?.attempt).toBe(1);
+      store.defer(item.id, "runner", { notBefore: "2026-08-15T01:00:00.000Z", code: "CHATGPT_LIMITED", message: "cooldown" });
+      const deferred = store.snapshot().items.find(candidate => candidate.id === item.id)!;
+      expect(deferred.attempt).toBe(0);
+      expect(deferred.state).toBe("retry-wait");
     } finally { rmSync(fx.root, { recursive: true, force: true }); }
   });
 });
