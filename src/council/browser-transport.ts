@@ -25,7 +25,7 @@ export interface CouncilPromptAttachment {
 export interface CouncilPersistentChatDriver {
   resume(input: { surfaceId: string; conversationUrl: string; prompt: string; attachments?: CouncilPromptAttachment[]; signal?: AbortSignal }): Promise<{ answer: string; conversationUrl: string }>;
   create(input: { surfaceId: string; prompt: string; attachments?: CouncilPromptAttachment[]; signal?: AbortSignal }): Promise<{ answer: string; conversationUrl: string }>;
-  capture(input: { surfaceId: string; conversationUrl: string; signal?: AbortSignal }): Promise<{ png: Buffer; conversationUrl: string; health: CouncilObservationHealth; note?: string }>;
+  capture?(input: { surfaceId: string; conversationUrl: string; signal?: AbortSignal }): Promise<{ png: Buffer; conversationUrl: string; health: CouncilObservationHealth; note?: string }>;
 }
 
 export interface CouncilBrowserTransportRunInput {
@@ -128,20 +128,24 @@ export class CouncilBrowserTransport {
 
   async captureConversation(input: { agentId: string; conversationUrl: string; signal?: AbortSignal }): Promise<CouncilBrowserCaptureResult> {
     const agentId = validAgentId(input.agentId);
+    if (!this.driver.capture) throw new Error("Council browser driver does not support observation capture");
+    const capture = this.driver.capture.bind(this.driver);
     if (input.signal?.aborted) throw new DOMException("Council browser capture aborted", "AbortError");
     const bindingKey = `agent:${agentId}`;
-    const traceId = `observe_${randomUUID().replaceAll("-", "")}`;
-    let lease: { surfaceId: string } | undefined;
+    let activeTraceId = "";
+    let leased = false;
     const run = async (): Promise<CouncilBrowserCaptureResult> => {
-      lease = await this.control.start({ traceId, bindingKey });
-      const heartbeat = this.heartbeat(traceId);
+      activeTraceId = `observe_${randomUUID().replaceAll("-", "")}`;
+      const lease = await this.control.start({ traceId: activeTraceId, bindingKey });
+      leased = true;
+      const heartbeat = this.heartbeat(activeTraceId);
       try {
-        const result = await this.driver.capture({ surfaceId: lease.surfaceId, conversationUrl: input.conversationUrl, signal: input.signal });
-        await this.control.end({ traceId, status: "completed" });
+        const result = await capture({ surfaceId: lease.surfaceId, conversationUrl: input.conversationUrl, signal: input.signal });
+        await this.control.end({ traceId: activeTraceId, status: "completed" });
         return result;
       } catch (error) {
         const aborted = (error instanceof DOMException && error.name === "AbortError") || error instanceof CouncilSurfaceUnavailableError;
-        await this.control.end({ traceId, status: aborted ? "aborted" : "failed", message: error instanceof Error ? error.message.slice(0, 500) : String(error).slice(0, 500) }).catch(() => {});
+        await this.control.end({ traceId: activeTraceId, status: aborted ? "aborted" : "failed", message: error instanceof Error ? error.message.slice(0, 500) : String(error).slice(0, 500) }).catch(() => {});
         throw error;
       } finally {
         heartbeat.stop();
@@ -152,10 +156,10 @@ export class CouncilBrowserTransport {
     } catch (error) {
       if (!(error instanceof CouncilSurfaceUnavailableError) || !this.control.release) throw error;
       await this.control.release({ bindingKey });
-      lease = undefined;
+      leased = false;
       return await run();
     } finally {
-      if (lease && this.control.release) await this.control.release({ bindingKey }).catch(() => false);
+      if (leased && this.control.release) await this.control.release({ bindingKey }).catch(() => false);
     }
   }
 
