@@ -50,9 +50,7 @@ function validAgentId(value: string): string {
 }
 
 function emitPhase(observer: CouncilExecutionObserver | undefined, phase: CouncilExecutionPhase): void {
-  if (!observer) return;
-  try { observer(phase); }
-  catch { /* Execution telemetry must never mutate browser-turn semantics. */ }
+  observer?.(phase);
 }
 
 export class CouncilBrowserTransport {
