@@ -176,15 +176,17 @@ export class CouncilAgentManager {
     const agent = this.requireManaged(agentId);
     const lease = this.registry.lease(agentId);
     if (lease.status === "queued") throw new Error(`Council agent ${agentId} is queued because all browser surfaces are busy`);
-    this.council.touchAgentPresence(agentId);
-    const presenceHeartbeat = setInterval(() => {
-      try { this.council.touchAgentPresence(agentId); }
-      catch { /* Presence is observability; heartbeat failure must not abort the active browser turn. */ }
-    }, MANAGED_PRESENCE_HEARTBEAT_MS);
-    presenceHeartbeat.unref?.();
-    onRunning?.();
+    let presenceHeartbeat: ReturnType<typeof setInterval> | undefined;
     let effects: DeferredEffect[] = [];
     try {
+      try { this.council.touchAgentPresence(agentId); }
+      catch { /* Presence is observability and must not strand a leased browser surface. */ }
+      presenceHeartbeat = setInterval(() => {
+        try { this.council.touchAgentPresence(agentId); }
+        catch { /* Presence is observability; heartbeat failure must not abort the active browser turn. */ }
+      }, MANAGED_PRESENCE_HEARTBEAT_MS);
+      presenceHeartbeat.unref?.();
+      onRunning?.();
       let result = await this.transport.run({
         agentId,
         conversationUrl: agent.conversationUrl,
@@ -207,9 +209,10 @@ export class CouncilAgentManager {
         parsed = this.parseAnswer(result.answer);
       }
       effects = this.applyActions(agentId, parsed, roomId);
-      this.council.touchAgentPresence(agentId);
+      try { this.council.touchAgentPresence(agentId); }
+      catch { /* A successful Council turn remains successful if presence telemetry cannot be renewed. */ }
     } finally {
-      clearInterval(presenceHeartbeat);
+      if (presenceHeartbeat) clearInterval(presenceHeartbeat);
       await this.transport.release(agentId).catch(() => false);
       this.registry.release(agentId);
     }
