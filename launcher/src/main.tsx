@@ -11,6 +11,7 @@ import "./styles.css";
 import "./council.css";
 import "./council-agents.css";
 import "./council-presence.css";
+import "./council-project-tabs.css";
 import "./council-setup.css";
 import "./council-supervisor.css";
 import "./council-update.css";
