@@ -52,7 +52,7 @@ function safeReason(value: string | undefined): string | undefined {
     .replace(/https?:\/\/[^\s)\]}>,]+/gi, "[url]")
     .replace(/\b[A-Za-z]:\\(?:[^\\\s]+\\)+[^\s]*/g, "[path]")
     .replace(/(?:^|\s)\/(?:Users|home|var|tmp|private|mnt|opt|srv)\/[^\s]*/g, match => `${match.startsWith(" ") ? " " : ""}[path]`)
-    .replace(/(?:bearer|token|api[_ -]?key)\s*[:=]\s*[^\s,;]+/gi, "$1=[redacted]")
+    .replace(/((?:bearer|token|api[_ -]?key))\s*[:=]\s*[^\s,;]+/gi, "$1=[redacted]")
     .slice(0, 500);
 }
 
