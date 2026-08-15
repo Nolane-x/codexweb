@@ -134,7 +134,69 @@ export interface ManagedAgentView {
   checkpointSaved: boolean;
   runtimeStatus: "active" | "sleeping" | "queued" | "failed";
 }
-export interface ManagedCouncilView { project: ManagedProjectView | null; agents: ManagedAgentView[] }
+
+export type CouncilAutonomyHealthStateView =
+  | "healthy"
+  | "sleeping"
+  | "busy"
+  | "stalled"
+  | "limited"
+  | "signed-out"
+  | "disconnected"
+  | "conversation-missing"
+  | "surface-missing"
+  | "quarantined"
+  | "unknown";
+
+export interface CouncilAutonomyHealthView {
+  agentId: string;
+  state: CouncilAutonomyHealthStateView;
+  lastSuccessAt?: string;
+  lastAttemptAt?: string;
+  consecutiveFailures: number;
+  lastFailureCode?: string;
+  cooldownUntil?: string;
+  lastObservedAt?: string;
+}
+
+export interface CouncilAutonomyStatusView {
+  version: 1;
+  projectRoomId: string | null;
+  dispatcher: {
+    running: boolean;
+    activeWorkItemId: string | null;
+    queued: number;
+    retryWait: number;
+    uncertain: number;
+    failed: number;
+    completed: number;
+  };
+  queue: { totalActive: number; byState: Record<string, number>; byKind: Record<string, number> };
+  health: CouncilAutonomyHealthView[];
+  breakerOpenCount: number;
+  budget: {
+    managedTurns: number;
+    spawns: number;
+    wakesByTarget: Record<string, number>;
+    policy: {
+      maxManagedTurnsPerProjectHour: number;
+      maxAutomaticWakesPerTargetHour: number;
+      maxAutomaticSpawnsPerProjectHour: number;
+      maxConsecutiveRecoveryAttempts: number;
+      maxActiveItemsPerProject: number;
+      equivalentWakeCooldownMs: number;
+      maxCorrelationDepth: number;
+      maxQueuedAgeMs: number;
+    };
+  } | null;
+  audit: { count: number; latestSequence: number; byTransition: Record<string, number> };
+}
+
+export interface ManagedCouncilView {
+  project: ManagedProjectView | null;
+  agents: ManagedAgentView[];
+  autonomy?: CouncilAutonomyStatusView | null;
+}
 
 export interface CouncilSharedStateView {
   version: 1;
@@ -296,7 +358,7 @@ export interface LauncherApi {
   }>;
   councilSupervisorStatus(): Promise<CouncilSupervisorStatusView>;
   setCouncilSupervisorManager(agentId: string | null): Promise<CouncilSupervisorStatusView>;
-  runCouncilSupervisorNow(): Promise<CouncilObservationView>;
+  runCouncilSupervisorNow(): Promise<unknown>;
   councilObservations(): Promise<CouncilObservationSummaryView[]>;
   councilObservation(runId: string): Promise<CouncilObservationView>;
   councilObservationScreenshot(runId: string, screenshotId: string): Promise<string>;
