@@ -141,7 +141,7 @@ export class CouncilAutonomyDispatcher {
     if (!healthGate.allowed) {
       const code = healthGate.reasonCode ?? "UNKNOWN";
       if (healthGate.retryAt) {
-        this.work.retry(leased.id, this.owner, { notBefore: healthGate.retryAt, code, message: "target agent circuit breaker cooldown is active" });
+        this.work.defer(leased.id, this.owner, { notBefore: healthGate.retryAt, code, message: "target agent circuit breaker cooldown is active" });
         this.auditEvent(leased, "policy-blocked", code, "target agent circuit breaker cooldown is active");
         if (code === "CHATGPT_LIMITED" || code === "RESPONSE_STALLED") this.escalate(leased, code, "target agent circuit breaker cooldown is active");
       } else {
@@ -160,7 +160,7 @@ export class CouncilAutonomyDispatcher {
       kind: leased.kind,
       targetAgentId: leased.targetAgentId,
       activeItems,
-      correlationDepth: 1,
+      correlationDepth: leased.correlationDepth,
       consecutiveRecoveryAttempts: Math.max(0, leased.attempt - 1),
       createdAt: leased.createdAt,
     });
