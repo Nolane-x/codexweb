@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CouncilObservationStore } from "../src/council/observation-store";
@@ -59,12 +59,11 @@ describe("CouncilObservationStore", () => {
       expect(store.list().some(run => run.startedAt.includes("00:00:00"))).toBe(false);
       const indexPath = join(root, "index.json");
       expect(JSON.parse(readFileSync(indexPath, "utf8")).runs).toHaveLength(2);
-      Bun.write(indexPath, "{not-json");
     } finally { rmSync(root, { recursive: true, force: true }); }
 
     const corruptRoot = mkdtempSync(join(tmpdir(), "council-observations-corrupt-"));
     try {
-      Bun.write(join(corruptRoot, "index.json"), "{not-json");
+      writeFileSync(join(corruptRoot, "index.json"), "{not-json", "utf8");
       const recovered = new CouncilObservationStore(corruptRoot);
       expect(recovered.list()).toEqual([]);
     } finally { rmSync(corruptRoot, { recursive: true, force: true }); }
