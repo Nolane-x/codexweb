@@ -1,14 +1,4 @@
 const { contextBridge, ipcRenderer } = require("electron");
-const {
-  clearObservations,
-  deleteObservation,
-  listObservations,
-  readObservation,
-  readObservationScreenshot,
-  runSupervisorNow,
-  setSupervisorManager,
-  supervisorStatus,
-} = require("./council-owner-client.cjs");
 
 function subscription(channel, listener) {
   const wrapped = (_event, value) => listener(value);
@@ -40,14 +30,14 @@ contextBridge.exposeInMainWorld("codexWebLauncher", {
   cancelTurns: () => ipcRenderer.invoke("launcher:cancel-turns"),
   setupMcp: (input) => ipcRenderer.invoke("launcher:setup-mcp", input),
   bindCurrentChatGptAsLead: (input = {}) => ipcRenderer.invoke("launcher:council-bind-current-lead", input),
-  councilSupervisorStatus: () => supervisorStatus(),
-  setCouncilSupervisorManager: (agentId) => setSupervisorManager(agentId),
-  runCouncilSupervisorNow: () => runSupervisorNow(),
-  councilObservations: () => listObservations(),
-  councilObservation: (runId) => readObservation(runId),
-  councilObservationScreenshot: (runId, screenshotId) => readObservationScreenshot(runId, screenshotId),
-  deleteCouncilObservation: (runId) => deleteObservation(runId),
-  clearCouncilObservations: () => clearObservations(),
+  councilSupervisorStatus: () => ipcRenderer.invoke("launcher:council-supervisor-status"),
+  setCouncilSupervisorManager: (agentId) => ipcRenderer.invoke("launcher:council-supervisor-manager", agentId),
+  runCouncilSupervisorNow: () => ipcRenderer.invoke("launcher:council-supervisor-run"),
+  councilObservations: () => ipcRenderer.invoke("launcher:council-observations-list"),
+  councilObservation: (runId) => ipcRenderer.invoke("launcher:council-observation-read", runId),
+  councilObservationScreenshot: (runId, screenshotId) => ipcRenderer.invoke("launcher:council-observation-screenshot", runId, screenshotId),
+  deleteCouncilObservation: (runId) => ipcRenderer.invoke("launcher:council-observation-delete", runId),
+  clearCouncilObservations: () => ipcRenderer.invoke("launcher:council-observations-clear"),
   setMcpStep: (step) => ipcRenderer.invoke("launcher:set-mcp-step", step),
   setAutostart: (enabled) => ipcRenderer.invoke("launcher:autostart", enabled),
   setPreference: (key, value) => ipcRenderer.invoke("launcher:set-preference", key, value),
