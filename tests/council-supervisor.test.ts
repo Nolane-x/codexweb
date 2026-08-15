@@ -65,7 +65,7 @@ describe("CouncilSupervisor", () => {
       const enabled = supervisor.setManager("lead");
       expect(enabled.enabled).toBe(true);
       expect(enabled.intervalMs).toBe(COUNCIL_SUPERVISOR_INTERVAL_MS);
-      expect(enabled.nextRunAt).toBeString();
+      expect(typeof enabled.nextRunAt).toBe("string");
       const disabled = supervisor.setManager(undefined);
       expect(disabled.enabled).toBe(false);
       expect(disabled.managerAgentId).toBeNull();
