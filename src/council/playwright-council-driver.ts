@@ -91,7 +91,7 @@ async function selectCouncilConnector(page: Page, signal?: AbortSignal): Promise
   }
   if (!await exactRow.isVisible().catch(() => false)) {
     const titles = await connectorRowTitles(menuRows);
-    throw new Error(`ChatGPT connector menu did not expose ${JSON.stringify(COUNCIL_CONNECTOR_NAME)} after ${attempts} attempt(s); visible rows: ${titles.map(JSON.stringify).join(", ")}`);
+    throw new Error(`ChatGPT connector menu did not expose ${JSON.stringify(COUNCIL_CONNECTOR_NAME)} after ${attempts} attempt(s); visible rows: ${titles.map(title => JSON.stringify(title)).join(", ")}`);
   }
   if (await exactRow.count() !== 1) throw new Error(`ChatGPT connector menu did not expose one exact ${JSON.stringify(COUNCIL_CONNECTOR_NAME)} row`);
   await exactRow.click({ force: true, timeout: 10_000 });
@@ -251,7 +251,7 @@ async function scrollConversationToBottom(page: Page, signal?: AbortSignal): Pro
   for (let pass = 0; pass < 6; pass++) {
     abortIfNeeded(signal);
     await page.evaluate(() => {
-      window.scrollTo({ top: document.documentElement.scrollHeight, behavior: "instant" });
+      window.scrollTo({ top: document.documentElement.scrollHeight, behavior: "auto" });
       const candidates = [...document.querySelectorAll<HTMLElement>("main, [role='main'], [class*='overflow-y-auto'], [class*='overflow-auto']")];
       for (const element of candidates) {
         if (element.scrollHeight > element.clientHeight + 8) element.scrollTop = element.scrollHeight;
