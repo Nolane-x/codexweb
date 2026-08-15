@@ -51,4 +51,24 @@ describe("CouncilObservationStore evidence integration", () => {
       expect(migrated.evidenceStats()).toMatchObject({ blobs: 1, references: 1 });
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
+
+  test("prunes oldest observation evidence when the combined archive exceeds the byte budget", () => {
+    const root = mkdtempSync(join(tmpdir(), "council-observation-budget-"));
+    try {
+      const evidence = new CouncilEvidenceStore(join(root, "evidence"));
+      const observations = new CouncilObservationStore(join(root, "observations"), { evidence, maxBytes: 1024 * 1024 });
+      const firstBytes = Buffer.alloc(700 * 1024, 1);
+      const secondBytes = Buffer.alloc(700 * 1024, 2);
+      const first = observations.begin({ projectRoomId: "project", managerAgentId: "lead", startedAt: "2026-08-15T00:00:00.000Z" });
+      observations.addAgent(first.id, { agentId: "a", name: "A", role: "coder", capturedAt: "2026-08-15T00:00:00.000Z", health: "healthy" }, firstBytes);
+      observations.complete(first.id, { completedAt: "2026-08-15T00:00:01.000Z" });
+      const second = observations.begin({ projectRoomId: "project", managerAgentId: "lead", startedAt: "2026-08-15T00:01:00.000Z" });
+      observations.addAgent(second.id, { agentId: "b", name: "B", role: "reviewer", capturedAt: "2026-08-15T00:01:00.000Z", health: "healthy" }, secondBytes);
+      observations.complete(second.id, { completedAt: "2026-08-15T00:01:01.000Z" });
+
+      expect(observations.get(first.id)).toBeUndefined();
+      expect(observations.get(second.id)?.id).toBe(second.id);
+      expect(observations.evidenceStats()).toMatchObject({ blobs: 1, references: 1, bytes: secondBytes.length });
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
 });
