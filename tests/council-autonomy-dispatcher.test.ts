@@ -38,7 +38,7 @@ describe("CouncilAutonomyDispatcher", () => {
     } finally { rmSync(fx.root, { recursive: true, force: true }); }
   });
 
-  test("retries only a pre-submit structured transient failure", async () => {
+  test("retries only a pre-submit structured transient failure after the breaker cooldown", async () => {
     let calls = 0;
     const fx = fixture(async (_item, hooks) => {
       calls += 1;
@@ -49,7 +49,7 @@ describe("CouncilAutonomyDispatcher", () => {
       const item = fx.work.enqueue({ kind: "wake", projectRoomId: "r", targetAgentId: "bob", dedupeKey: "retry", priority: 90, maxAttempts: 3 });
       await fx.dispatcher.runOnce();
       expect(fx.work.snapshot().items.find(value => value.id === item.id)?.state).toBe("retry-wait");
-      fx.advance(2_000);
+      fx.advance(16_000);
       await fx.dispatcher.runOnce();
       expect(fx.work.snapshot().items.find(value => value.id === item.id)?.state).toBe("completed");
       expect(calls).toBe(2);
