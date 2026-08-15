@@ -1,6 +1,6 @@
 import type { CouncilAgentRegistry } from "./agent-registry";
-import { CouncilAgentManager } from "./agent-manager";
-import type { CouncilBrowserCaptureResult, CouncilBrowserTransport, CouncilPromptAttachment } from "./browser-transport";
+import { CouncilAgentManager, type CouncilManagedSpawnInput } from "./agent-manager";
+import type { CouncilBrowserCaptureResult, CouncilBrowserTransport, CouncilExecutionObserver, CouncilPromptAttachment } from "./browser-transport";
 import type { ParsedCouncilActionFooter } from "./browser-actions";
 import { assertCouncilDecisionGate } from "./decision-gate";
 import { COUNCIL_PERMISSIONS, type CouncilPermission, type ManagedAgentRecord, type ManagedAgentStateStore } from "./managed-agent-state";
@@ -20,6 +20,11 @@ export interface CouncilManagedRuntimeOptions {
   scheduler?: CouncilWorkScheduler;
 }
 
+export interface CouncilManagedAutonomyHooks {
+  enqueueWake(wake: CouncilWakeEvent, depth?: number): Promise<void>;
+  enqueuePreparedSpawn(input: { sourceAgentId: string; targetAgentId: string; roomId: string; depth: number }): Promise<void>;
+}
+
 export interface PublicManagedAgent extends Omit<ManagedAgentRecord, "conversationUrl" | "checkpoint"> {
   conversationBound: boolean;
   checkpointSaved: boolean;
@@ -36,6 +41,7 @@ export class CouncilManagedRuntime {
   private readonly scheduler: CouncilWorkScheduler;
   private manager?: CouncilAgentManager;
   private managerProjectUpdatedAt?: string;
+  private autonomy?: CouncilManagedAutonomyHooks;
 
   constructor(options: CouncilManagedRuntimeOptions) {
     this.council = options.council;
@@ -45,6 +51,12 @@ export class CouncilManagedRuntime {
     this.transport = options.transport;
     this.parseAnswer = options.parseAnswer;
     this.scheduler = options.scheduler ?? new CouncilWorkScheduler();
+  }
+
+  attachAutonomy(hooks: CouncilManagedAutonomyHooks | undefined): void {
+    this.autonomy = hooks;
+    this.manager = undefined;
+    this.managerProjectUpdatedAt = undefined;
   }
 
   activeProject(): ManagedCouncilProject | undefined { return this.project.get(); }
@@ -61,6 +73,11 @@ export class CouncilManagedRuntime {
         runtimeStatus: runtime?.status ?? "sleeping",
       };
     });
+  }
+
+  managedStatus(agentId: string): PublicManagedAgent["runtimeStatus"] | undefined {
+    if (!this.managed.get(agentId)) return undefined;
+    return this.registry.get(agentId)?.status ?? "sleeping";
   }
 
   supervisorAgents(): ManagedAgentRecord[] { return this.managed.list(); }
@@ -133,9 +150,19 @@ export class CouncilManagedRuntime {
     return this.project.bindWorkspace(input);
   }
 
-  async spawnAgent(sourceAgentId: string, input: { name: string; role: string; mandate: string; requestedAgentId?: string; permissions?: CouncilPermission[] }): Promise<ManagedAgentRecord> {
+  async spawnAgent(sourceAgentId: string, input: CouncilManagedSpawnInput): Promise<ManagedAgentRecord> {
     const project = this.requireProject();
-    return await this.managerFor(project).spawnAgent(sourceAgentId, input, 0, project.roomId);
+    const manager = this.managerFor(project);
+    if (!this.autonomy) return await manager.spawnAgent(sourceAgentId, input, 0, project.roomId);
+    const child = manager.prepareSpawnAgent(sourceAgentId, input, project.roomId);
+    await this.autonomy.enqueuePreparedSpawn({ sourceAgentId, targetAgentId: child.id, roomId: project.roomId, depth: 0 });
+    return child;
+  }
+
+  async executePreparedSpawn(agentId: string, roomId: string, depth = 0, onPhase?: CouncilExecutionObserver): Promise<ManagedAgentRecord> {
+    const project = this.requireProject();
+    if (roomId !== project.roomId) throw new Error(`Managed spawn belongs to active project room ${project.roomId}, not ${roomId}`);
+    return await this.managerFor(project).executePreparedSpawn(agentId, roomId, depth, onPhase);
   }
 
   canDeliverWake(targetAgentId: string): boolean {
@@ -146,8 +173,16 @@ export class CouncilManagedRuntime {
     if (!this.canDeliverWake(wake.targetAgentId)) return false;
     const project = this.requireProject();
     if (wake.roomId !== project.roomId) throw new Error(`Managed agent ${wake.targetAgentId} belongs to active project room ${project.roomId}, not ${wake.roomId}`);
-    await this.managerFor(project).enqueueWakeEvent(wake, 0);
+    if (this.autonomy) await this.autonomy.enqueueWake(wake, 0);
+    else await this.managerFor(project).enqueueWakeEvent(wake, 0);
     return true;
+  }
+
+  async executeWakeEvent(wake: CouncilWakeEvent, depth = 0, onPhase?: CouncilExecutionObserver): Promise<void> {
+    if (!this.canDeliverWake(wake.targetAgentId)) throw new Error(`managed wake target does not exist: ${wake.targetAgentId}`);
+    const project = this.requireProject();
+    if (wake.roomId !== project.roomId) throw new Error(`Managed agent ${wake.targetAgentId} belongs to active project room ${project.roomId}, not ${wake.roomId}`);
+    await this.managerFor(project).executeWakeEvent(wake, depth, onPhase);
   }
 
   async captureAgent(agentId: string): Promise<CouncilBrowserCaptureResult> {
@@ -159,10 +194,21 @@ export class CouncilManagedRuntime {
     }, { attempts: 3, baseDelayMs: 1_000, maxDelayMs: 4_000, retryable: error => error instanceof Error && /capacity|active turn|surface unavailable/i.test(error.message) });
   }
 
-  async runManagerObservation(agentId: string, prompt: string, attachments: CouncilPromptAttachment[]): Promise<string> {
+  async runManagerObservation(agentId: string, prompt: string, attachments: CouncilPromptAttachment[], onPhase?: CouncilExecutionObserver): Promise<string> {
     const project = this.requireProject();
     if (!this.managed.get(agentId)) throw new Error(`managed manager does not exist: ${agentId}`);
-    return await this.managerFor(project).runManagerObservation(agentId, prompt, attachments);
+    return await this.managerFor(project).runManagerObservation(agentId, prompt, attachments, onPhase);
+  }
+
+  private async routeSpawnEffect(sourceAgentId: string, input: CouncilManagedSpawnInput, depth: number, roomId: string): Promise<void> {
+    const project = this.requireProject();
+    const manager = this.managerFor(project);
+    if (!this.autonomy) {
+      await manager.spawnAgent(sourceAgentId, input, depth, roomId);
+      return;
+    }
+    const child = manager.prepareSpawnAgent(sourceAgentId, input, roomId);
+    await this.autonomy.enqueuePreparedSpawn({ sourceAgentId, targetAgentId: child.id, roomId, depth });
   }
 
   private requireProject(): ManagedCouncilProject {
@@ -182,6 +228,13 @@ export class CouncilManagedRuntime {
         projectMission: project.mission,
         defaultRoomId: project.roomId,
         scheduler: this.scheduler,
+        effectSink: {
+          deliverWake: async (wake, depth) => {
+            if (this.autonomy) await this.autonomy.enqueueWake(wake, depth);
+            else await this.managerFor(this.requireProject()).enqueueWakeEvent(wake, depth);
+          },
+          spawn: async (sourceAgentId, input, depth, roomId) => await this.routeSpawnEffect(sourceAgentId, input, depth, roomId),
+        },
       });
       this.managerProjectUpdatedAt = project.updatedAt;
     }
