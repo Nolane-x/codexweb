@@ -1,6 +1,6 @@
 {
   "name": "codex-chatgpt-web",
-  "version": "3.4.0",
+  "version": "3.5.0",
   "private": true,
   "description": "Standalone Electron-first ChatGPT Council with Secure MCP Tunnel, persistent Playwright conversations, deliberation, wake routing, and managed multi-agent work.",
   "repository": {
@@ -44,7 +44,7 @@
     "playwright-core": "^1.62.0",
     "tiktoken": "1.0.22",
     "turndown": "7.2.0",
-    "turndown-plugin-gfm": "1.0.2",
+    "turndown-plugin-gfm": "^1.0.2",
     "zod": "4.4.3"
   },
   "devDependencies": {
