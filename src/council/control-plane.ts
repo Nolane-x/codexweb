@@ -4,6 +4,7 @@ export interface CouncilControlPlaneAvailability {
   observations?: boolean;
   autonomy?: boolean;
   memory?: boolean;
+  execution?: boolean;
 }
 
 export interface CouncilCapabilityManifest {
@@ -20,6 +21,7 @@ export interface CouncilCapabilityManifest {
     observations: boolean;
     autonomy: boolean;
     memory: boolean;
+    execution: boolean;
     chatGptConnector: {
       mode: "optional";
       requiredForManagedTurns: false;
@@ -44,6 +46,7 @@ export function buildCouncilCapabilityManifest(input: CouncilControlPlaneAvailab
       observations: input.observations === true,
       autonomy: input.autonomy === true,
       memory: input.memory === true,
+      execution: input.execution === true,
       chatGptConnector: { mode: "optional", requiredForManagedTurns: false, healthAuthority: "electron-chatgpt-surface" },
     },
   };
@@ -99,6 +102,11 @@ export function buildCouncilDiagnosticReport(input: CouncilDiagnosticInput): Cou
       id: "browser-control", label: "Playwright browser control", status: managed ? "ready" : "unavailable",
       evidence: managed ? `Managed browser transport is registered for ${Math.max(0, input.managedAgentCount ?? 0)} persisted agent(s).` : "Browser automation is not attached to this MCP process.",
       nextAction: managed ? "Managed turns may continue with browser-only Council even when the ChatGPT connector is absent." : "Start the Electron managed runtime.",
+    },
+    {
+      id: "execution-control", label: "Execution control plane", status: input.execution ? "ready" : "unavailable",
+      evidence: input.execution ? "Typed execution runs, command receipts, and the external submission boundary are actively enforced." : "The bounded execution run registry and command authority are not attached to this MCP process.",
+      nextAction: input.execution ? "No action required." : "Start Council through the managed Electron browser runtime to enable execution inspection and controls.",
     },
     {
       id: "chatgpt-connector", label: "ChatGPT MCP connector", status: "unverified",
