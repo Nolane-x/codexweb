@@ -33,6 +33,19 @@ function takeOption(args: string[], name: string): string | undefined {
   return value;
 }
 function projectName(value: string): string { const normalized = value.trim(); return normalized ? normalized.slice(0, 160) : "ChatGPT Project"; }
+function ownerExecutionReason(error: unknown): string {
+  return (error instanceof Error ? error.message : String(error ?? "Execution command failed")).replace(/[\r\n\t]+/g, " ").trim().slice(0, 500);
+}
+function requireExecutionRun(execution: CouncilExecutionControlPlane, runId: string) {
+  const run = execution.readRun(runId);
+  if (!run) throw new Error(`Council execution run does not exist: ${runId}`);
+  return run;
+}
+function latestExecutionRun(execution: CouncilExecutionControlPlane, agentId: string, kind: "focus" | "capture") {
+  const run = execution.listRuns().find(candidate => candidate.agentId === agentId && candidate.kind === kind);
+  if (!run) throw new Error(`Council execution ${kind} run was not observed for ${agentId}`);
+  return run;
+}
 
 export async function runCouncilMcpMain(args: string[]): Promise<void> {
   const remaining = [...args];
@@ -175,6 +188,95 @@ export async function runCouncilMcpMain(args: string[]): Promise<void> {
             search: (input: { projectRoomId: string; query: string; limit: number }) => memory!.search(input),
             recent: (input: { projectRoomId: string; limit: number }) => memory!.recent(input),
             clearProject: (projectRoomId: string) => memory!.clearProject(projectRoomId),
+          },
+        } : {}),
+        ...(execution ? {
+          execution: {
+            runs: () => execution!.listRuns(),
+            run: (runId: string) => requireExecutionRun(execution!, runId),
+            events: (runId: string) => {
+              requireExecutionRun(execution!, runId);
+              return execution!.events(runId);
+            },
+            receipts: () => execution!.receipts(200),
+            cancel: (runId: string) => {
+              const plane = execution!;
+              try {
+                requireExecutionRun(plane, runId);
+                const run = plane.cancelRun(runId, "Execution cancellation requested by local operator");
+                const receipt = plane.recordCommandReceipt({
+                  commandType: "cancel",
+                  actorId: "electron-owner",
+                  targetRunId: runId,
+                  outcome: "accepted",
+                  reason: run.status === "uncertain"
+                    ? "Local cancellation accepted after submission boundary; remote delivery remains uncertain"
+                    : "Local execution cancellation accepted before submission boundary",
+                });
+                return { run, receipt };
+              } catch (error) {
+                plane.recordCommandReceipt({ commandType: "cancel", actorId: "electron-owner", targetRunId: runId, outcome: "rejected", reason: ownerExecutionReason(error) });
+                throw error;
+              }
+            },
+            focus: async (agentId: string) => {
+              const plane = execution!;
+              try {
+                await managedRuntime!.focusAgentConversation(agentId);
+                const run = latestExecutionRun(plane, agentId, "focus");
+                const receipt = plane.recordCommandReceipt({
+                  commandType: "focus",
+                  actorId: "electron-owner",
+                  targetAgentId: agentId,
+                  outcome: "accepted",
+                  reason: "Trusted managed conversation focus completed",
+                  resultingRunId: run.runId,
+                });
+                return { run, receipt };
+              } catch (error) {
+                plane.recordCommandReceipt({ commandType: "focus", actorId: "electron-owner", targetAgentId: agentId, outcome: "rejected", reason: ownerExecutionReason(error) });
+                throw error;
+              }
+            },
+            capture: async (agentId: string) => {
+              const plane = execution!;
+              try {
+                await managedRuntime!.captureAgent(agentId);
+                const run = latestExecutionRun(plane, agentId, "capture");
+                const receipt = plane.recordCommandReceipt({
+                  commandType: "capture",
+                  actorId: "electron-owner",
+                  targetAgentId: agentId,
+                  outcome: "accepted",
+                  reason: "Trusted managed observation capture completed",
+                  resultingRunId: run.runId,
+                });
+                return { run, receipt };
+              } catch (error) {
+                plane.recordCommandReceipt({ commandType: "capture", actorId: "electron-owner", targetAgentId: agentId, outcome: "rejected", reason: ownerExecutionReason(error) });
+                throw error;
+              }
+            },
+            retry: async (runId: string) => {
+              const plane = execution!;
+              try {
+                const sourceRun = requireExecutionRun(plane, runId);
+                const resultingRunId = await plane.retryRun(runId);
+                const resultingRun = requireExecutionRun(plane, resultingRunId);
+                const receipt = plane.recordCommandReceipt({
+                  commandType: "retry",
+                  actorId: "electron-owner",
+                  targetRunId: runId,
+                  outcome: "accepted",
+                  reason: "Single-use safe pre-submit replay accepted by local operator",
+                  resultingRunId,
+                });
+                return { sourceRun, resultingRun, receipt };
+              } catch (error) {
+                plane.recordCommandReceipt({ commandType: "retry", actorId: "electron-owner", targetRunId: runId, outcome: "rejected", reason: ownerExecutionReason(error) });
+                throw error;
+              }
+            },
           },
         } : {}),
       },
