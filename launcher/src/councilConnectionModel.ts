@@ -78,12 +78,5 @@ export function deriveCouncilConnections(input: {
       ? { id: "chatgpt", label: "ChatGPT session", status: "healthy", detail: "Signed in", evidence: "Authenticated Electron profile", repair: NO_ACTION }
       : { id: "chatgpt", label: "ChatGPT session", status: "blocked", detail: "Sign in required", evidence: browser.message || "No authenticated ChatGPT session", repair: "Sign in to ChatGPT in the owned Electron browser." };
 
-  return [
-    { id: "tunnel", ...tunnel },
-    { id: "runtime", ...runtimeNode },
-    { id: "mcp", ...mcp },
-    { id: "connector", ...connector },
-    { id: "playwright", ...playwright },
-    { id: "chatgpt", ...chatgpt },
-  ];
+  return [tunnel, runtimeNode, mcp, connector, playwright, chatgpt];
 }
