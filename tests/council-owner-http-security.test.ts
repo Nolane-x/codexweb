@@ -18,20 +18,20 @@ function fixture() {
     port: 0,
     owner: {
       token: () => TOKEN,
-      focusAgent: async agentId => ({ agentId, focused: true }),
-      startLead: async input => {
+      focusAgent: async (agentId: string) => ({ agentId, focused: true }),
+      startLead: async (input: { conversationUrl: string; projectName: string }) => {
         calls.push(input);
         return { lead: "lead", bound: true };
       },
       execution: {
         runs: () => { executionCalls.push({ operation: "runs" }); return [{ runId: "run_1", agentId: "critic", kind: "turn", status: "active" }]; },
-        run: runId => { executionCalls.push({ operation: "run", id: runId }); return { runId, agentId: "critic", kind: "turn", status: "active" }; },
-        events: runId => { executionCalls.push({ operation: "events", id: runId }); return [{ eventId: "event_1", runId, kind: "phase" }]; },
+        run: (runId: string) => { executionCalls.push({ operation: "run", id: runId }); return { runId, agentId: "critic", kind: "turn", status: "active" }; },
+        events: (runId: string) => { executionCalls.push({ operation: "events", id: runId }); return [{ eventId: "event_1", runId, kind: "phase" }]; },
         receipts: () => { executionCalls.push({ operation: "receipts" }); return [{ receiptId: "receipt_1", commandType: "cancel", actorId: "electron-owner", outcome: "accepted" }]; },
-        cancel: runId => { executionCalls.push({ operation: "cancel", id: runId }); return { runId, status: "aborted" }; },
-        focus: async agentId => { executionCalls.push({ operation: "focus", id: agentId }); return { agentId, focused: true }; },
-        capture: async agentId => { executionCalls.push({ operation: "capture", id: agentId }); return { agentId, runId: "run_capture" }; },
-        retry: async runId => { executionCalls.push({ operation: "retry", id: runId }); return { sourceRunId: runId, resultingRunId: "run_retry" }; },
+        cancel: (runId: string) => { executionCalls.push({ operation: "cancel", id: runId }); return { runId, status: "aborted" }; },
+        focus: async (agentId: string) => { executionCalls.push({ operation: "focus", id: agentId }); return { agentId, focused: true }; },
+        capture: async (agentId: string) => { executionCalls.push({ operation: "capture", id: agentId }); return { agentId, runId: "run_capture" }; },
+        retry: async (runId: string) => { executionCalls.push({ operation: "retry", id: runId }); return { sourceRunId: runId, resultingRunId: "run_retry" }; },
       },
     } as any,
   });
