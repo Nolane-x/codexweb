@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { deriveCouncilChatGptState, councilChatGptMayRetry } from "../src/council/chatgpt-deep-state.ts";
+import { deriveCouncilChatGptState, councilChatGptMayRetry } from "../src/council/chatgpt-deep-state";
 
 const base = {
   composerPresent: true,
