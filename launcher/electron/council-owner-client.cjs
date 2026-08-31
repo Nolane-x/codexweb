@@ -85,6 +85,10 @@ async function bindCurrentConversationAsLead({ conversationUrl, projectName }, o
   }, options);
 }
 
+async function focusAgentConversation(agentId, options = {}) {
+  return await ownerRequest("agent/focus", { agent_id: assertId(agentId, "agentId") }, { ...options, timeoutMs: options.timeoutMs ?? OWNER_LONG_REQUEST_TIMEOUT_MS });
+}
+
 async function supervisorStatus(options = {}) { return await ownerRequest("supervisor/status", {}, options); }
 async function setSupervisorManager(agentId, options = {}) { return await ownerRequest("supervisor/manager", { agent_id: agentId || null }, options); }
 async function runSupervisorNow(options = {}) { return await ownerRequest("supervisor/run", {}, { ...options, timeoutMs: options.timeoutMs ?? OWNER_LONG_REQUEST_TIMEOUT_MS }); }
@@ -125,6 +129,7 @@ module.exports = {
   autonomyStatus,
   bindCurrentConversationAsLead,
   cancelExceptionalWork,
+  focusAgentConversation,
   clearObservations,
   clearProjectMemory,
   deleteObservation,
