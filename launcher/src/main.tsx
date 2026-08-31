@@ -4,6 +4,7 @@ import { App } from "./App";
 import { CouncilUpdatePrompt } from "./CouncilUpdatePrompt";
 import "./tokens.css";
 import "./styles.css";
+import "./council-presence.css";
 import "./council-project-tabs.css";
 import "./council-4-shell-foundation.css";
 import "./council-4-workspaces.css";
