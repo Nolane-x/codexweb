@@ -28,12 +28,15 @@ export type CouncilExecutionObservation =
   | { type: "phase"; phase: CouncilExecutionPhase }
   | { type: "deep-state"; state: CouncilChatGptState; confidence: number; reason: string }
   | { type: "health"; health: CouncilObservationHealth; note?: string };
-export type CouncilExecutionObserver = (observation: CouncilExecutionObservation) => void;
-export type CouncilExecutionPhaseObserver = (phase: CouncilExecutionPhase) => void;
+/** Generic default deliberately stays permissive for legacy imports during the 4.1 migration.
+ * New public telemetry boundaries use the explicit aliases below and remain strongly typed. */
+export type CouncilExecutionObserver<T = any> = (value: T) => void;
+export type CouncilExecutionPhaseObserver = CouncilExecutionObserver<CouncilExecutionPhase>;
+export type CouncilExecutionTelemetryObserver = CouncilExecutionObserver<CouncilExecutionObservation>;
 
 export interface CouncilPersistentChatDriver {
-  resume(input: { surfaceId: string; conversationUrl: string; prompt: string; attachments?: CouncilPromptAttachment[]; signal?: AbortSignal; onPhase?: CouncilExecutionPhaseObserver; onExecution?: CouncilExecutionObserver }): Promise<{ answer: string; conversationUrl: string }>;
-  create(input: { surfaceId: string; prompt: string; attachments?: CouncilPromptAttachment[]; signal?: AbortSignal; onPhase?: CouncilExecutionPhaseObserver; onExecution?: CouncilExecutionObserver }): Promise<{ answer: string; conversationUrl: string }>;
+  resume(input: { surfaceId: string; conversationUrl: string; prompt: string; attachments?: CouncilPromptAttachment[]; signal?: AbortSignal; onPhase?: CouncilExecutionPhaseObserver; onExecution?: CouncilExecutionTelemetryObserver }): Promise<{ answer: string; conversationUrl: string }>;
+  create(input: { surfaceId: string; prompt: string; attachments?: CouncilPromptAttachment[]; signal?: AbortSignal; onPhase?: CouncilExecutionPhaseObserver; onExecution?: CouncilExecutionTelemetryObserver }): Promise<{ answer: string; conversationUrl: string }>;
   focus?(input: { surfaceId: string; conversationUrl: string; signal?: AbortSignal }): Promise<{ conversationUrl: string }>;
   capture?(input: { surfaceId: string; conversationUrl: string; signal?: AbortSignal }): Promise<{ png: Buffer; conversationUrl: string; health: CouncilObservationHealth; note?: string }>;
 }
@@ -46,7 +49,7 @@ export interface CouncilBrowserTransportRunInput {
   attachments?: CouncilPromptAttachment[];
   signal?: AbortSignal;
   onPhase?: CouncilExecutionPhaseObserver;
-  onExecution?: CouncilExecutionObserver;
+  onExecution?: CouncilExecutionTelemetryObserver;
 }
 export interface CouncilBrowserTransportResult { answer: string; conversationUrl: string; resumed: boolean }
 export interface CouncilBrowserCaptureResult { png: Buffer; conversationUrl: string; health: CouncilObservationHealth; note?: string }
@@ -57,7 +60,7 @@ function validAgentId(value: string): string {
   return id;
 }
 
-function emitPhase(legacy: CouncilExecutionPhaseObserver | undefined, observer: CouncilExecutionObserver | undefined, phase: CouncilExecutionPhase): void {
+function emitPhase(legacy: CouncilExecutionPhaseObserver | undefined, observer: CouncilExecutionTelemetryObserver | undefined, phase: CouncilExecutionPhase): void {
   legacy?.(phase);
   observer?.({ type: "phase", phase });
 }
