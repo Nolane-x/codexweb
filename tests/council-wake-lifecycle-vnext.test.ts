@@ -113,6 +113,8 @@ test("expired wakes are durably reaped once and stop consuming capacity, decisio
     expect(expired.status).toBe("expired");
     expect(expired.transitions.map((transition: any) => transition.status)).toEqual(["queued", "expired"]);
     expect(councilWakeCapacity(store.snapshot().wakes, "alice")).toEqual({ active: 0, max: 2, available: 2 });
+    const latestProposal = store.snapshot().messages.find(message => message.roomId === "nolane" && message.kind === "proposal")!;
+    store.say({ roomId: "nolane", authorAgentId: "alice", replyTo: latestProposal.id, body: "Independent review completed after the wake expired." });
     expect(evaluateCouncilDecisionGate(store.snapshot(), "nolane").ready).toBe(true);
     expect(store.buildContextPacket({ agentId: "alice", roomId: "nolane" }).wake).toBeUndefined();
 
