@@ -83,6 +83,10 @@ const ACTIVE_DEEP_STATES = new Set<CouncilChatGptState>([
   "COMPLETING",
 ]);
 
+export function isTerminalExecutionStatus(status: CouncilExecutionRunStatus): boolean {
+  return TERMINAL_RUN_STATUSES.has(status);
+}
+
 export function deriveExecutionRetrySafety(input: CouncilExecutionRetryInput): CouncilExecutionRetrySafety {
   if (input.status === "uncertain" || input.failureCode === "SUBMISSION_UNCERTAIN") return "operator-resolution-required";
   if (input.phase && councilPhaseReached(input.phase, "submit-started")) return "forbidden-after-submit";
@@ -120,6 +124,7 @@ export class CouncilExecutionControlPlane {
   private readonly runs = new Map<string, CouncilExecutionRun>();
   private readonly eventHistory = new Map<string, CouncilExecutionEvent[]>();
   private readonly commandReceipts: Readonly<CouncilExecutionCommandReceipt>[] = [];
+  private readonly cancellationHandles = new Map<string, AbortController>();
 
   constructor(options: CouncilExecutionControlPlaneOptions = {}) {
     this.now = options.now ?? Date.now;
@@ -169,6 +174,30 @@ export class CouncilExecutionControlPlane {
   receipts(limit = this.maxReceipts): Readonly<CouncilExecutionCommandReceipt>[] {
     const safeLimit = Math.max(1, Math.min(this.maxReceipts, Math.trunc(limit)));
     return this.commandReceipts.slice(-safeLimit).map(cloneFrozenReceipt);
+  }
+
+  registerCancellation(runId: string, controller: AbortController): void {
+    this.requireMutable(runId);
+    if (controller.signal.aborted) throw new Error(`Council execution cancellation handle is already aborted: ${runId}`);
+    if (this.cancellationHandles.has(runId)) throw new Error(`Council execution cancellation handle already exists: ${runId}`);
+    this.cancellationHandles.set(runId, controller);
+  }
+
+  releaseCancellation(runId: string, controller?: AbortController): void {
+    const current = this.cancellationHandles.get(runId);
+    if (!current) return;
+    if (controller && current !== controller) return;
+    this.cancellationHandles.delete(runId);
+  }
+
+  cancelRun(runId: string, message = "Local execution cancellation requested"): CouncilExecutionRun {
+    this.requireMutable(runId);
+    const controller = this.cancellationHandles.get(runId);
+    if (!controller) throw new Error(`Council execution run is not locally cancellable: ${runId}`);
+    this.cancellationHandles.delete(runId);
+    const result = this.abortRun(runId, message);
+    controller.abort();
+    return result;
   }
 
   markSurfaceBound(runId: string, value = true): CouncilExecutionRun {
@@ -227,6 +256,7 @@ export class CouncilExecutionControlPlane {
     run.completedAt = iso(now);
     run.updatedAt = iso(now);
     run.retrySafety = deriveExecutionRetrySafety(run);
+    this.cancellationHandles.delete(runId);
     this.appendEvent(runId, { kind: "completed" });
     this.pruneTerminalRuns();
     return cloneRun(this.requireRun(runId));
@@ -241,6 +271,7 @@ export class CouncilExecutionControlPlane {
     run.completedAt = iso(now);
     run.updatedAt = iso(now);
     run.retrySafety = deriveExecutionRetrySafety(run);
+    this.cancellationHandles.delete(runId);
     this.appendEvent(runId, {
       kind: "failure",
       ...(run.failureCode ? { failureCode: run.failureCode } : {}),
@@ -259,6 +290,7 @@ export class CouncilExecutionControlPlane {
     run.completedAt = iso(now);
     run.updatedAt = iso(now);
     run.retrySafety = deriveExecutionRetrySafety(run);
+    this.cancellationHandles.delete(runId);
     this.appendEvent(runId, { kind: "failure", failureCode: run.failureCode, message: run.failureMessage });
     this.pruneTerminalRuns();
     return cloneRun(this.requireRun(runId));
@@ -342,6 +374,7 @@ export class CouncilExecutionControlPlane {
   }
 
   private deleteRun(runId: string): void {
+    this.cancellationHandles.delete(runId);
     this.runs.delete(runId);
     this.eventHistory.delete(runId);
   }
