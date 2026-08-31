@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { evaluateIndependentCritiqueGate } from "../src/council/decision-critique.ts";
+import { evaluateIndependentCritiqueGate } from "../src/council/decision-critique";
 
 const proposal = (id: string, author: string, threadId = id) => ({ id, roomId: "core", authorAgentId: author, kind: "proposal", threadId });
 const reply = (id: string, author: string, threadId: string, replyTo: string) => ({ id, roomId: "core", authorAgentId: author, kind: "message", threadId, replyTo });
