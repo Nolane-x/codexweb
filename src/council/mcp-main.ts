@@ -6,6 +6,7 @@ import { CouncilAutonomyKernel } from "./autonomy-kernel";
 import { CouncilBrowserTransport } from "./browser-transport";
 import { parseCouncilActionFooter } from "./browser-action-parser";
 import { CouncilEvidenceStore } from "./evidence-store";
+import { CouncilExecutionControlPlane } from "./execution-control-plane";
 import { HybridCouncilWakeDelivery } from "./hybrid-wake-delivery";
 import { startCouncilHttpServer } from "./http-server";
 import { createLauncherPersistentTurnControl } from "./launcher-turn-control";
@@ -50,13 +51,15 @@ export async function runCouncilMcpMain(args: string[]): Promise<void> {
   let observations: CouncilObservationStore | undefined;
   let supervisor: CouncilSupervisor | undefined;
   let autonomy: CouncilAutonomyKernel | undefined;
+  let execution: CouncilExecutionControlPlane | undefined;
   let memoryProjector: CouncilMemoryProjector | undefined;
   let staleMonitor: CouncilStaleWorkMonitor | undefined;
   try {
     const config = loadConfig();
     if (config.browserHost === "launcher" && config.browserHostDescriptorPath) {
       const control = createLauncherPersistentTurnControl(config.browserHostDescriptorPath);
-      const transport = new CouncilBrowserTransport(control, new PlaywrightCouncilChatDriver(config.browserHostDescriptorPath));
+      execution = new CouncilExecutionControlPlane();
+      const transport = new CouncilBrowserTransport(control, new PlaywrightCouncilChatDriver(config.browserHostDescriptorPath), { execution });
       managedState = new ManagedAgentStateStore(join(councilDir, "managed-agents.json"));
       managedRuntime = new CouncilManagedRuntime({
         council: store,
@@ -206,6 +209,7 @@ export async function runCouncilMcpMain(args: string[]): Promise<void> {
       ...(observations ? { observations } : {}),
       ...(autonomy ? { autonomy } : {}),
       ...(memory ? { memory } : {}),
+      ...(execution ? { execution } : {}),
     });
   } finally {
     staleMonitor?.stop();
