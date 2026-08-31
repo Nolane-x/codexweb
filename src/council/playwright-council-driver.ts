@@ -11,6 +11,7 @@ import { connectLauncherBrowserHost } from "../launcher-browser-host";
 import type { CouncilExecutionObserver, CouncilPersistentChatDriver, CouncilPromptAttachment } from "./browser-transport";
 import { CouncilConversationUnavailableError, CouncilSurfaceUnavailableError } from "./browser-transport";
 import { assertChatGptConversationUrl } from "./conversation-registry";
+import { classifyCouncilConnectorObservation } from "./chatgpt-connector-policy";
 import type { CouncilObservationHealth } from "./observation-store";
 import { classifyConversationSurface } from "./playwright-council-surface";
 
@@ -22,7 +23,7 @@ const RESPONSE_TIMEOUT_MS = 15 * 60_000;
 const RESPONSE_SETTLE_MS = 1_250;
 const FALLBACK_SETTLE_MS = 3_000;
 const INSERT_CHUNK_CHARS = 12_000;
-const CONNECTOR_MENU_TIMEOUT_MS = 25_000;
+const CONNECTOR_MENU_TIMEOUT_MS = 4_000;
 
 interface DriverInput { surfaceId: string; prompt: string; attachments?: CouncilPromptAttachment[]; signal?: AbortSignal; onPhase?: CouncilExecutionObserver }
 interface ResumeInput extends DriverInput { conversationUrl: string }
@@ -63,54 +64,56 @@ async function councilConnectorIsSelected(composer: Locator): Promise<boolean> {
   return exact === 1;
 }
 
-async function connectorRowTitles(rows: Locator): Promise<string[]> {
-  return (await rows.filter({ visible: true }).allInnerTexts().catch(() => [] as string[]))
-    .map(text => (text.split("\n")[0] ?? "").replace(/\s+/g, " ").trim())
-    .filter(Boolean);
-}
-
-/** Select the real ChatGPT connector with trusted Playwright input and require an exact selected marker. */
-async function selectCouncilConnector(page: Page, signal?: AbortSignal, onPhase?: CouncilExecutionObserver): Promise<Locator> {
+/** Prefer the real ChatGPT connector when it is available, but keep ordinary Council
+ * browser turns usable without it. The action footer is still processed by the local Council
+ * runtime, so connector absence is capability degradation rather than a transport failure. */
+async function trySelectCouncilConnector(page: Page, signal?: AbortSignal, onPhase?: CouncilExecutionObserver): Promise<{ composer: Locator; connectorSelected: boolean }> {
   let composer = await visibleComposer(page);
   await composer.fill("");
-  if (await councilConnectorIsSelected(composer)) {
+  const selectedExactCount = await selectedCouncilConnector(composer).evaluateAll(elements => elements.filter(element => element.getAttribute("data-keyword") === COUNCIL_CONNECTOR_NAME).length);
+  const initial = classifyCouncilConnectorObservation({ selectedExactCount, exactMenuRowCount: 0 });
+  if (initial === "ambiguous") throw new Error("ChatGPT exposed duplicate CodexWeb Council connector selections");
+  if (initial === "selected") {
     phase(onPhase, "connector-selected");
-    return composer;
+    return { composer, connectorSelected: true };
   }
 
   const menuRows = page.locator('.__menu-item[tabindex="0"]');
   const exactRow = menuRows.filter({ has: page.getByText(COUNCIL_CONNECTOR_NAME, { exact: true }) });
   const deadline = Date.now() + CONNECTOR_MENU_TIMEOUT_MS;
-  let attempts = 0;
   while (Date.now() < deadline) {
     abortIfNeeded(signal);
-    attempts += 1;
     composer = await visibleComposer(page);
     await composer.fill("");
     await composer.focus();
-    await composer.pressSequentially("@c", { delay: 25 });
+    await composer.pressSequentially("@c", { delay: 20 });
     try {
-      await exactRow.waitFor({ state: "visible", timeout: Math.min(2_500, Math.max(1, deadline - Date.now())) });
-      break;
+      await exactRow.waitFor({ state: "visible", timeout: Math.min(1_250, Math.max(1, deadline - Date.now())) });
     } catch (error) {
       if (!(error instanceof Error) || error.name !== "TimeoutError") throw error;
     }
+    const exactMenuRowCount = await exactRow.count().catch(() => 0);
+    const disposition = classifyCouncilConnectorObservation({ selectedExactCount: 0, exactMenuRowCount });
+    if (disposition === "ambiguous") throw new Error(`ChatGPT exposed duplicate exact ${JSON.stringify(COUNCIL_CONNECTOR_NAME)} connector rows`);
+    if (disposition === "selectable" && await exactRow.isVisible().catch(() => false)) {
+      await exactRow.click({ force: true, timeout: 10_000 });
+      const selectedComposer = await visibleComposer(page);
+      await selectedCouncilConnector(selectedComposer).waitFor({ state: "visible", timeout: 10_000 });
+      if (!await councilConnectorIsSelected(selectedComposer)) throw new Error("ChatGPT did not commit the CodexWeb Council connector selection");
+      phase(onPhase, "connector-selected");
+      return { composer: selectedComposer, connectorSelected: true };
+    }
   }
-  if (!await exactRow.isVisible().catch(() => false)) {
-    const titles = await connectorRowTitles(menuRows);
-    throw new Error(`ChatGPT connector menu did not expose ${JSON.stringify(COUNCIL_CONNECTOR_NAME)} after ${attempts} attempt(s); visible rows: ${titles.map(title => JSON.stringify(title)).join(", ")}`);
-  }
-  if (await exactRow.count() !== 1) throw new Error(`ChatGPT connector menu did not expose one exact ${JSON.stringify(COUNCIL_CONNECTOR_NAME)} row`);
-  await exactRow.click({ force: true, timeout: 10_000 });
-  const selectedComposer = await visibleComposer(page);
-  await selectedCouncilConnector(selectedComposer).waitFor({ state: "visible", timeout: 10_000 });
-  if (!await councilConnectorIsSelected(selectedComposer)) throw new Error("ChatGPT did not commit the CodexWeb Council connector selection");
-  phase(onPhase, "connector-selected");
-  return selectedComposer;
+
+  // Optional connector unavailable: close any transient menu and restore a clean composer.
+  await page.keyboard.press("Escape").catch(() => {});
+  composer = await visibleComposer(page);
+  await composer.fill("");
+  return { composer, connectorSelected: false };
 }
 
 async function attachExactPrompt(page: Page, prompt: string, signal?: AbortSignal, onPhase?: CouncilExecutionObserver): Promise<Locator> {
-  const composer = await selectCouncilConnector(page, signal, onPhase);
+  const { composer, connectorSelected } = await trySelectCouncilConnector(page, signal, onPhase);
   await composer.focus();
   await page.keyboard.press(process.platform === "darwin" ? "Meta+ArrowDown" : "Control+End");
   const transported = ` ${prompt}`;
@@ -131,7 +134,7 @@ async function attachExactPrompt(page: Page, prompt: string, signal?: AbortSigna
     abortIfNeeded(signal);
     observed = await composerText(composer);
     if (observed === prompt) {
-      if (!await councilConnectorIsSelected(composer)) throw new Error("CodexWeb Council connector selection disappeared while attaching the prompt");
+      if (connectorSelected && !await councilConnectorIsSelected(composer)) throw new Error("CodexWeb Council connector selection disappeared while attaching the prompt");
       phase(onPhase, "prompt-attached");
       return composer;
     }
@@ -345,6 +348,32 @@ export class PlaywrightCouncilChatDriver implements CouncilPersistentChatDriver 
       phase(input.onPhase, "conversation-ready");
       const answer = await sendAndWait(page, input.prompt, input.attachments, input.signal, input.onPhase);
       return { answer, conversationUrl: await waitForConversationUrl(page) };
+    } finally {
+      await connection.browser.close().catch(() => {});
+    }
+  }
+
+  async focus(input: { surfaceId: string; conversationUrl: string; signal?: AbortSignal }): Promise<{ conversationUrl: string }> {
+    const expected = assertChatGptConversationUrl(input.conversationUrl);
+    const connection = await connectLauncherBrowserHost(this.descriptorPath, PAGE_TIMEOUT_MS, input.surfaceId, input.signal);
+    try {
+      const page = connection.page;
+      if (page.isClosed()) throw new CouncilSurfaceUnavailableError("Council browser surface closed before conversation focus");
+      if (page.url() !== expected) await navigateBeforeSubmit(page, expected);
+      await new Promise(resolve => setTimeout(resolve, 250));
+      const diagnostic = await bodyDiagnosticText(page);
+      const surface = classifyConversationSurface(expected, page.url(), diagnostic);
+      if (surface === "surface-unavailable") throw new CouncilSurfaceUnavailableError(`Council browser surface unavailable before focus (${page.url()})`);
+      if (surface === "unavailable") throw new CouncilConversationUnavailableError(`ChatGPT conversation is unavailable: ${expected}`);
+      if (surface === "invalid") throw new Error(`ChatGPT persistent surface left the expected origin: ${page.url()}`);
+      try { await visibleComposer(page); }
+      catch (error) {
+        if (surfaceUnavailable(page)) throw new CouncilSurfaceUnavailableError(`Council browser surface unavailable before focus became ready (${page.url()})`);
+        const state = classifyConversationSurface(expected, page.url(), await bodyDiagnosticText(page));
+        if (state === "unavailable") throw new CouncilConversationUnavailableError(`ChatGPT conversation is unavailable: ${expected}`);
+        throw error;
+      }
+      return { conversationUrl: assertChatGptConversationUrl(page.url()) };
     } finally {
       await connection.browser.close().catch(() => {});
     }
