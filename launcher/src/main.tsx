@@ -5,6 +5,10 @@ import { CouncilUpdatePrompt } from "./CouncilUpdatePrompt";
 import "./tokens.css";
 import "./styles.css";
 import "./council-project-tabs.css";
+import "./council-4-shell-foundation.css";
+import "./council-4-workspaces.css";
+import "./council-4-detail.css";
+import "./council-4-responsive.css";
 import "./council-update.css";
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
