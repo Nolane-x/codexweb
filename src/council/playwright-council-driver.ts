@@ -12,6 +12,7 @@ import type { CouncilExecutionObserver, CouncilPersistentChatDriver, CouncilProm
 import { CouncilConversationUnavailableError, CouncilSurfaceUnavailableError } from "./browser-transport";
 import { assertChatGptConversationUrl } from "./conversation-registry";
 import { classifyCouncilConnectorObservation } from "./chatgpt-connector-policy";
+import { deriveCouncilChatGptState, type CouncilChatGptStateResult } from "./chatgpt-deep-state";
 import type { CouncilObservationHealth } from "./observation-store";
 import { classifyConversationSurface } from "./playwright-council-surface";
 
@@ -19,9 +20,8 @@ const CHATGPT_HOME_URL = "https://chatgpt.com/";
 const COUNCIL_CONNECTOR_NAME = "CodexWeb Council";
 const PAGE_TIMEOUT_MS = 60_000;
 const SUBMISSION_TIMEOUT_MS = 30_000;
-const RESPONSE_TIMEOUT_MS = 15 * 60_000;
-const RESPONSE_SETTLE_MS = 1_250;
-const FALLBACK_SETTLE_MS = 3_000;
+const RESPONSE_TIMEOUT_MS = 45 * 60_000;
+const DIAGNOSTIC_SAMPLE_MS = 1_500;
 const INSERT_CHUNK_CHARS = 12_000;
 const CONNECTOR_MENU_TIMEOUT_MS = 4_000;
 
@@ -105,7 +105,6 @@ async function trySelectCouncilConnector(page: Page, signal?: AbortSignal, onPha
     }
   }
 
-  // Optional connector unavailable: close any transient menu and restore a clean composer.
   await page.keyboard.press("Escape").catch(() => {});
   composer = await visibleComposer(page);
   await composer.fill("");
@@ -190,6 +189,35 @@ async function approveCouncilToolIfNeeded(page: Page): Promise<void> {
   await allow.press("Enter");
 }
 
+function diagnosticSnapshot(text: string): Pick<import("./chatgpt-deep-state").CouncilChatGptSnapshot, "rateLimited" | "conversationLimit" | "connectionLost" | "terminalError"> {
+  const compact = text.replace(/\s+/g, " ").trim();
+  return {
+    conversationLimit: /conversation (?:is )?too long|conversation limit|maximum context|start a new chat to continue/i.test(compact),
+    rateLimited: /too many requests|making requests too quickly|rate limit|usage limit|message limit|you(?:'|’)ve reached|try again after|come back later/i.test(compact),
+    connectionLost: /network error|connection error|failed to fetch|reconnecting|connection lost/i.test(compact),
+    terminalError: /error generating|unable to generate|response failed|there was an error generating|something went wrong while generating/i.test(compact),
+  };
+}
+
+async function genericUserInputRequired(page: Page): Promise<boolean> {
+  const dialog = page.locator('[role="dialog"], [data-testid*="approval"], [data-testid*="confirmation"]').filter({ visible: true }).last();
+  if (!await dialog.isVisible().catch(() => false)) return false;
+  const text = (await dialog.innerText().catch(() => "")).replace(/\s+/g, " ").trim();
+  if (!text) return false;
+  if (text.includes(`Allow ChatGPT to use ${COUNCIL_CONNECTOR_NAME}?`)) return false;
+  return /approval|approve|confirm|verification|verify|choose|select|continue|permission|required/i.test(text);
+}
+
+function throwDeepStateFailure(state: CouncilChatGptStateResult): void {
+  if (state.state === "DOM_DRIFT") throw new Error(`ChatGPT Council DOM_DRIFT: ${state.reason}`);
+  if (state.state === "RATE_LIMITED") throw new Error(`ChatGPT Council RATE_LIMITED: ${state.reason}`);
+  if (state.state === "CONVERSATION_LIMIT") throw new Error(`ChatGPT Council CONVERSATION_LIMIT: ${state.reason}`);
+  if (state.state === "CONNECTION_LOST") throw new Error(`ChatGPT Council CONNECTION_LOST: ${state.reason}`);
+  if (state.state === "FAILED") throw new Error(`ChatGPT Council FAILED: ${state.reason}`);
+  if (state.state === "WAITING_USER") throw new Error(`ChatGPT Council WAITING_USER: ${state.reason}`);
+  if (state.state === "STALLED") throw new Error(`ChatGPT Council response stalled: ${state.reason}`);
+}
+
 async function sendAndWait(page: Page, prompt: string, attachments: CouncilPromptAttachment[] | undefined, signal?: AbortSignal, onPhase?: CouncilExecutionObserver): Promise<string> {
   abortIfNeeded(signal);
   const composer = await attachExactPrompt(page, prompt, signal, onPhase);
@@ -202,6 +230,7 @@ async function sendAndWait(page: Page, prompt: string, attachments: CouncilPromp
   const send = composer.locator("xpath=ancestor::form[1]").getByTestId("send-button");
   await send.waitFor({ state: "visible", timeout: 20_000 });
   if (!await send.isEnabled()) throw new Error("ChatGPT Council send button is disabled after prompt attachment");
+  const submittedAt = Date.now();
   phase(onPhase, "submit-started");
   await send.press("Enter");
 
@@ -223,35 +252,70 @@ async function sendAndWait(page: Page, prompt: string, attachments: CouncilPromp
   }
   if (!submissionObserved) throw new Error("ChatGPT Council did not accept the submitted prompt");
 
-  const responseDeadline = Date.now() + RESPONSE_TIMEOUT_MS;
+  const responseDeadline = submittedAt + RESPONSE_TIMEOUT_MS;
+  let previousState: CouncilChatGptStateResult | undefined;
   let lastText = "";
-  let lastChangedAt = Date.now();
-  let sawResponse = false;
+  let lastAssistantMutationAt = submittedAt;
+  let lastStatusMutationAt = submittedAt;
+  let lastStatusSignature = "";
+  let lastDiagnosticAt = 0;
+  let diagnostic = { rateLimited: false, conversationLimit: false, connectionLost: false, terminalError: false };
   let emittedStreaming = false;
+
   while (Date.now() < responseDeadline) {
     abortIfNeeded(signal);
     if (page.isClosed()) throw new Error("ChatGPT Council browser surface closed during the turn");
     await approveCouncilToolIfNeeded(page);
+    const now = Date.now();
     const present = await responseTurn.count() > 0;
-    if (present) {
-      sawResponse = true;
-      if (!emittedStreaming) {
-        emittedStreaming = true;
-        phase(onPhase, "response-streaming");
-      }
-      const text = await currentAnswerText(responseTurn);
-      if (text !== lastText) { lastText = text; lastChangedAt = Date.now(); }
-      const running = await page.locator(CHATGPT_STOP_BUTTON_SELECTOR).filter({ visible: true }).count() > 0;
-      const completion = await responseTurn.locator(CHATGPT_COMPLETION_ACTION_SELECTOR).filter({ visible: true }).count() > 0;
-      const stableFor = Date.now() - lastChangedAt;
-      if (lastText && !running && ((completion && stableFor >= RESPONSE_SETTLE_MS) || stableFor >= FALLBACK_SETTLE_MS)) {
-        phase(onPhase, "response-complete");
-        return lastText;
-      }
+    const text = present ? await currentAnswerText(responseTurn) : "";
+    if (text !== lastText) {
+      lastText = text;
+      lastAssistantMutationAt = now;
     }
+    const [running, completion, waitingUser] = await Promise.all([
+      page.locator(CHATGPT_STOP_BUTTON_SELECTOR).filter({ visible: true }).count().then(count => count > 0),
+      present ? responseTurn.locator(CHATGPT_COMPLETION_ACTION_SELECTOR).filter({ visible: true }).count().then(count => count > 0) : Promise.resolve(false),
+      genericUserInputRequired(page),
+    ]);
+    const statusSignature = `${present}:${running}:${completion}:${waitingUser}`;
+    if (statusSignature !== lastStatusSignature) {
+      lastStatusSignature = statusSignature;
+      lastStatusMutationAt = now;
+    }
+    if (now - lastDiagnosticAt >= DIAGNOSTIC_SAMPLE_MS) {
+      diagnostic = diagnosticSnapshot(await bodyDiagnosticText(page));
+      lastDiagnosticAt = now;
+    }
+
+    const nextState = deriveCouncilChatGptState({
+      composerPresent: true,
+      responsePresent: present,
+      assistantText: text,
+      responseSignature: text,
+      completionActionVisible: completion,
+      generationRunning: running,
+      stopVisible: running,
+      waitingUser,
+      ...diagnostic,
+      toolActivities: [],
+      lastAssistantMutationAt,
+      lastStatusMutationAt,
+    }, { submittedAt }, previousState, now);
+    previousState = nextState;
+
+    if (present && !emittedStreaming && ["THINKING", "DEEP_THINKING", "STREAMING", "TOOL_RUNNING", "COMPLETING", "COMPLETED"].includes(nextState.state)) {
+      emittedStreaming = true;
+      phase(onPhase, "response-streaming");
+    }
+    if (nextState.state === "COMPLETED") {
+      phase(onPhase, "response-complete");
+      return nextState.lastAssistantText;
+    }
+    throwDeepStateFailure(nextState);
     await new Promise(resolve => setTimeout(resolve, 250));
   }
-  throw new Error(sawResponse ? "ChatGPT Council response did not reach stable completion" : "ChatGPT Council did not create an assistant response");
+  throw new Error(`ChatGPT Council response exceeded the ${Math.round(RESPONSE_TIMEOUT_MS / 60_000)} minute hard wall-clock limit`);
 }
 
 async function waitForConversationUrl(page: Page, timeoutMs = 15_000): Promise<string> {
