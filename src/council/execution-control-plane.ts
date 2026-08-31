@@ -125,6 +125,7 @@ export class CouncilExecutionControlPlane {
   private readonly eventHistory = new Map<string, CouncilExecutionEvent[]>();
   private readonly commandReceipts: Readonly<CouncilExecutionCommandReceipt>[] = [];
   private readonly cancellationHandles = new Map<string, AbortController>();
+  private readonly retryHandles = new Map<string, () => Promise<string>>();
 
   constructor(options: CouncilExecutionControlPlaneOptions = {}) {
     this.now = options.now ?? Date.now;
@@ -190,6 +191,27 @@ export class CouncilExecutionControlPlane {
     this.cancellationHandles.delete(runId);
   }
 
+  registerRetry(runId: string, replay: () => Promise<string>): void {
+    const run = this.requireRun(runId);
+    if (run.retrySafety !== "safe-before-submit" || run.status === "completed" || run.status === "waiting-user" || run.status === "uncertain") {
+      throw new Error(`Council execution run cannot register retry authority: ${runId}`);
+    }
+    if (this.retryHandles.has(runId)) throw new Error(`Council execution replay is already registered: ${runId}`);
+    this.retryHandles.set(runId, replay);
+  }
+
+  async retryRun(runId: string): Promise<string> {
+    const run = this.requireRun(runId);
+    if (run.retrySafety === "operator-resolution-required") throw new Error(`Council execution ${runId} requires operator resolution and cannot be retried`);
+    if (run.retrySafety !== "safe-before-submit" || (run.status !== "failed" && run.status !== "aborted")) {
+      throw new Error(`Council execution ${runId} cannot be retried after the submission boundary or from status ${run.status}`);
+    }
+    const replay = this.retryHandles.get(runId);
+    if (!replay) throw new Error(`Council execution replay is not available or was already retried: ${runId}`);
+    this.retryHandles.delete(runId);
+    return await replay();
+  }
+
   cancelRun(runId: string, message = "Local execution cancellation requested"): CouncilExecutionRun {
     this.requireMutable(runId);
     const controller = this.cancellationHandles.get(runId);
@@ -220,6 +242,7 @@ export class CouncilExecutionControlPlane {
     run.phase = phase;
     if (run.status === "waiting-user") run.status = "active";
     run.retrySafety = deriveExecutionRetrySafety(run);
+    if (councilPhaseReached(phase, "submit-started")) this.retryHandles.delete(runId);
     this.touch(run);
     this.appendEvent(runId, { kind: "phase", phase });
     return cloneRun(run);
@@ -232,6 +255,7 @@ export class CouncilExecutionControlPlane {
     if (input.state === "WAITING_USER") run.status = "waiting-user";
     else if (ACTIVE_DEEP_STATES.has(input.state) && run.status === "waiting-user") run.status = "active";
     run.retrySafety = deriveExecutionRetrySafety(run);
+    if (run.retrySafety !== "safe-before-submit") this.retryHandles.delete(runId);
     this.touch(run);
     this.appendEvent(runId, {
       kind: "deep-state",
@@ -257,6 +281,7 @@ export class CouncilExecutionControlPlane {
     run.updatedAt = iso(now);
     run.retrySafety = deriveExecutionRetrySafety(run);
     this.cancellationHandles.delete(runId);
+    this.retryHandles.delete(runId);
     this.appendEvent(runId, { kind: "completed" });
     this.pruneTerminalRuns();
     return cloneRun(this.requireRun(runId));
@@ -272,6 +297,7 @@ export class CouncilExecutionControlPlane {
     run.updatedAt = iso(now);
     run.retrySafety = deriveExecutionRetrySafety(run);
     this.cancellationHandles.delete(runId);
+    if (run.retrySafety !== "safe-before-submit") this.retryHandles.delete(runId);
     this.appendEvent(runId, {
       kind: "failure",
       ...(run.failureCode ? { failureCode: run.failureCode } : {}),
@@ -291,6 +317,7 @@ export class CouncilExecutionControlPlane {
     run.updatedAt = iso(now);
     run.retrySafety = deriveExecutionRetrySafety(run);
     this.cancellationHandles.delete(runId);
+    if (run.retrySafety !== "safe-before-submit") this.retryHandles.delete(runId);
     this.appendEvent(runId, { kind: "failure", failureCode: run.failureCode, message: run.failureMessage });
     this.pruneTerminalRuns();
     return cloneRun(this.requireRun(runId));
@@ -375,6 +402,7 @@ export class CouncilExecutionControlPlane {
 
   private deleteRun(runId: string): void {
     this.cancellationHandles.delete(runId);
+    this.retryHandles.delete(runId);
     this.runs.delete(runId);
     this.eventHistory.delete(runId);
   }
