@@ -28,10 +28,10 @@ export interface CouncilChatGptSnapshot {
   generationRunning?: boolean;
   stopVisible?: boolean;
   waitingUser?: boolean;
-  rateLimited?: boolean;
-  conversationLimit?: boolean;
-  connectionLost?: boolean;
-  terminalError?: boolean;
+  rateLimited: boolean;
+  conversationLimit: boolean;
+  connectionLost: boolean;
+  terminalError: boolean;
   toolActivities?: CouncilChatGptToolActivity[];
   lastAssistantMutationAt?: number;
   lastStatusMutationAt?: number;
@@ -125,7 +125,7 @@ function evolveDomHealth(snapshot: CouncilChatGptSnapshot, previous: CouncilChat
 }
 
 export function deriveCouncilChatGptState(
-  snapshot: CouncilChatGptSnapshot = {},
+  snapshot: CouncilChatGptSnapshot = {} as CouncilChatGptSnapshot,
   telemetry: CouncilChatGptTelemetry = {},
   previous: CouncilChatGptPreviousState = {},
   now = Date.now(),
