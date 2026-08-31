@@ -31,6 +31,7 @@ const {
   clearObservations,
   clearProjectMemory,
   deleteObservation,
+  focusAgentConversation,
   listExceptionalWork,
   listObservations,
   memoryRecent,
@@ -264,6 +265,7 @@ function registerIpc({ logger, stateStore }) {
     const projectName = typeof input.projectName === "string" ? input.projectName.trim().slice(0, 160) : "ChatGPT Project";
     return await bindCurrentConversationAsLead({ conversationUrl, projectName: projectName || "ChatGPT Project" });
   });
+  handle("launcher:council-agent-focus", (_event, agentId) => focusAgentConversation(safeCouncilId(agentId, "agentId")));
   handle("launcher:council-supervisor-status", () => supervisorStatus());
   handle("launcher:council-supervisor-manager", (_event, agentId) => {
     if (agentId !== null && agentId !== undefined && (typeof agentId !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(agentId))) throw new Error("Council manager agent id is invalid");
