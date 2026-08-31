@@ -15,6 +15,7 @@ function fixture() {
     port: 0,
     owner: {
       token: () => TOKEN,
+      focusAgent: async agentId => ({ agentId, focused: true }),
       startLead: async () => ({}),
       autonomy: {
         status: () => ({ version: 1 }),
