@@ -9,12 +9,13 @@ import { registerCouncilMemoryTools } from "./mcp-tools-memory";
 import { registerCouncilObservationTools } from "./mcp-tools-observations";
 import type { CouncilWakeDelivery } from "./mcp-shared";
 import { registerCouncilDiscussionTools } from "./mcp-tools-discussion";
+import { registerCouncilSystemTools } from "./mcp-tools-system";
 import { registerCouncilWorkTools } from "./mcp-tools-work";
 import type { CouncilObservationStore } from "./observation-store";
 import { CouncilStore } from "./store";
 
 export const COUNCIL_MCP_SERVER_NAME = "codexweb-council";
-export const COUNCIL_MCP_SERVER_VERSION = "1.5.0";
+export const COUNCIL_MCP_SERVER_VERSION = "1.6.0";
 export const COUNCIL_TOOL_NAMES = [
   "council_join",
   "council_room_upsert",
@@ -40,6 +41,9 @@ export const COUNCIL_TOOL_NAMES = [
   "council_autonomy_audit",
   "council_memory_search",
   "council_memory_recent",
+  "council_capabilities",
+  "council_system_status",
+  "council_diagnose",
 ] as const;
 
 export interface CouncilMcpServerOptions {
@@ -56,6 +60,7 @@ export function createCouncilMcpServer(store: CouncilStore, options: CouncilMcpS
     if (!explicit || !token) throw new Error("Every Council call requires agent_id and agent_token; call council_join first and keep the private capability it returns");
     return store.authenticateAgent(explicit, token).id;
   };
+  registerCouncilSystemTools(server, store, resolveActor, options);
   registerCouncilDiscussionTools(server, store, resolveActor, options.managedRuntime);
   registerCouncilWorkTools(server, store, resolveActor, options.wakeDelivery, options.managedRuntime);
   if (options.managedRuntime) registerCouncilManagedTools(server, options.managedRuntime, resolveActor);
