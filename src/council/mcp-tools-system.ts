@@ -1,6 +1,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CouncilAutonomyKernel } from "./autonomy-kernel";
 import { buildCouncilCapabilityManifest, buildCouncilDiagnosticReport, buildCouncilSystemStatus } from "./control-plane";
+import type { CouncilExecutionControlPlane } from "./execution-control-plane";
 import type { CouncilManagedRuntime } from "./managed-runtime";
 import type { CouncilMemoryIndex } from "./memory-index";
 import { actorSchema, councilMcpResult, type CouncilWakeDelivery, type ResolveCouncilActor } from "./mcp-shared";
@@ -13,6 +14,7 @@ export interface CouncilSystemToolOptions {
   observations?: CouncilObservationStore;
   autonomy?: CouncilAutonomyKernel;
   memory?: CouncilMemoryIndex;
+  execution?: CouncilExecutionControlPlane;
 }
 
 function availability(options: CouncilSystemToolOptions) {
@@ -22,6 +24,7 @@ function availability(options: CouncilSystemToolOptions) {
     observations: Boolean(options.observations),
     autonomy: Boolean(options.autonomy),
     memory: Boolean(options.memory),
+    execution: Boolean(options.execution),
   };
 }
 
@@ -60,7 +63,7 @@ function statusProjection(store: CouncilStore, options: CouncilSystemToolOptions
 export function registerCouncilSystemTools(server: McpServer, store: CouncilStore, resolveActor: ResolveCouncilActor, options: CouncilSystemToolOptions = {}): void {
   server.registerTool("council_capabilities", {
     title: "Read Council control-plane capabilities",
-    description: "Negotiate the additive Council Control Plane v2 feature manifest before choosing browser, managed-agent, autonomy, observation, or memory operations. Connector availability is intentionally reported as optional and externally verified.",
+    description: "Negotiate the additive Council Control Plane v2 feature manifest before choosing browser, managed-agent, execution, autonomy, observation, or memory operations. Connector availability is intentionally reported as optional and externally verified.",
     inputSchema: { ...actorSchema },
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   }, async ({ agent_id, agent_token }, extra) => {
