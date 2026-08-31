@@ -185,6 +185,15 @@ export class CouncilManagedRuntime {
     await this.managerFor(project).executeWakeEvent(wake, depth, onPhase);
   }
 
+  async focusAgentConversation(agentId: string): Promise<{ conversationUrl: string }> {
+    const agent = this.managed.get(agentId);
+    if (!agent) throw new Error(`managed agent does not exist: ${agentId}`);
+    if (!agent.conversationUrl) throw new Error(`managed agent ${agentId} has no persistent ChatGPT conversation`);
+    return await this.scheduler.enqueue(`focus:${agent.id}`, async () => {
+      return await this.transport.focusConversation({ agentId: agent.id, conversationUrl: agent.conversationUrl! });
+    }, { attempts: 3, baseDelayMs: 500, maxDelayMs: 2_000, retryable: error => error instanceof Error && /capacity|active turn|surface unavailable/i.test(error.message) });
+  }
+
   async captureAgent(agentId: string): Promise<CouncilBrowserCaptureResult> {
     const agent = this.managed.get(agentId);
     if (!agent) throw new Error(`managed agent does not exist: ${agentId}`);
@@ -211,7 +220,7 @@ export class CouncilManagedRuntime {
     await this.autonomy.enqueuePreparedSpawn({ sourceAgentId, targetAgentId: child.id, roomId, depth });
   }
 
-  private requireProject(): ManagedCouncilProject {
+  private requireProject(): ManaedCouncilProject {
     const project = this.project.get();
     if (!project) throw new Error("No managed Council project is active; bootstrap the first lead with council_start_project");
     return project;

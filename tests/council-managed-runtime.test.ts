@@ -61,4 +61,29 @@ describe("CouncilManagedRuntime", () => {
       expect(() => bindRepoWorkspace.call(runtime, "bob", workspace)).toThrow(/Lead|lead/i);
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
+  test("focuses a bound managed conversation using only controller-owned agent state", async () => {
+    const root = mkdtempSync(join(tmpdir(), "managed-runtime-focus-"));
+    try {
+      const council = new CouncilStore(join(root, "state.json"));
+      council.joinAgent({ id: "alice", name: "Alice", role: "Lead" });
+      const managed = new ManagedAgentStateStore(join(root, "agents.json"));
+      const calls: Array<{ agentId: string; conversationUrl: string }> = [];
+      const runtime = new CouncilManagedRuntime({
+        council,
+        managed,
+        project: new ManagedProjectStateStore(join(root, "project.json")),
+        registry: new CouncilAgentRegistry(),
+        transport: {
+          async focusConversation(input: { agentId: string; conversationUrl: string }) { calls.push(input); return { conversationUrl: input.conversationUrl }; },
+        } as any,
+        parseAnswer: (() => { throw new Error("unused"); }) as any,
+      });
+      runtime.startProject("alice", { roomId: "core", name: "Core", mission: "Build safely", mandate: "Lead deliberation" });
+      managed.bindConversation("alice", "https://chatgpt.com/c/alice");
+      await expect(runtime.focusAgentConversation("alice")).resolves.toEqual({ conversationUrl: "https://chatgpt.com/c/alice" });
+      expect(calls).toEqual([{ agentId: "alice", conversationUrl: "https://chatgpt.com/c/alice" }]);
+      await expect(runtime.focusAgentConversation("missing")).rejects.toThrow(/managed agent does not exist/);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
 });
