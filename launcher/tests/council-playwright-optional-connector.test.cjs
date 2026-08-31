@@ -15,7 +15,7 @@ test('managed Playwright turns prefer but do not require the ChatGPT MCP connect
 
 test('optional connector discovery restores a clean composer before browser-only prompt insertion', () => {
   assert.match(driver, /await composer\.fill\(""\);[\s\S]*return \{ composer, connectorSelected: false \};/);
-  const submitBoundary = driver.indexOf('phase(onPhase, "submit-started")');
+  const submitBoundary = driver.indexOf('phase(onPhase, onExecution, "submit-started")');
   const pressEnter = driver.indexOf('await send.press("Enter")');
   assert.ok(submitBoundary >= 0 && pressEnter > submitBoundary, 'submit-started must remain before Enter');
 });
