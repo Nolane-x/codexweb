@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { CouncilExecutionPhase } from "./autonomy-errors";
+import type { CouncilChatGptState } from "./chatgpt-deep-state";
 import type { CouncilObservationHealth } from "./observation-store";
 
 export class CouncilConversationUnavailableError extends Error {
@@ -23,11 +24,16 @@ export interface CouncilPromptAttachment {
   buffer: Buffer;
 }
 
-export type CouncilExecutionObserver = (phase: CouncilExecutionPhase) => void;
+export type CouncilExecutionObservation =
+  | { type: "phase"; phase: CouncilExecutionPhase }
+  | { type: "deep-state"; state: CouncilChatGptState; confidence: number; reason: string }
+  | { type: "health"; health: CouncilObservationHealth; note?: string };
+export type CouncilExecutionObserver = (observation: CouncilExecutionObservation) => void;
+export type CouncilExecutionPhaseObserver = (phase: CouncilExecutionPhase) => void;
 
 export interface CouncilPersistentChatDriver {
-  resume(input: { surfaceId: string; conversationUrl: string; prompt: string; attachments?: CouncilPromptAttachment[]; signal?: AbortSignal; onPhase?: CouncilExecutionObserver }): Promise<{ answer: string; conversationUrl: string }>;
-  create(input: { surfaceId: string; prompt: string; attachments?: CouncilPromptAttachment[]; signal?: AbortSignal; onPhase?: CouncilExecutionObserver }): Promise<{ answer: string; conversationUrl: string }>;
+  resume(input: { surfaceId: string; conversationUrl: string; prompt: string; attachments?: CouncilPromptAttachment[]; signal?: AbortSignal; onPhase?: CouncilExecutionPhaseObserver; onExecution?: CouncilExecutionObserver }): Promise<{ answer: string; conversationUrl: string }>;
+  create(input: { surfaceId: string; prompt: string; attachments?: CouncilPromptAttachment[]; signal?: AbortSignal; onPhase?: CouncilExecutionPhaseObserver; onExecution?: CouncilExecutionObserver }): Promise<{ answer: string; conversationUrl: string }>;
   focus?(input: { surfaceId: string; conversationUrl: string; signal?: AbortSignal }): Promise<{ conversationUrl: string }>;
   capture?(input: { surfaceId: string; conversationUrl: string; signal?: AbortSignal }): Promise<{ png: Buffer; conversationUrl: string; health: CouncilObservationHealth; note?: string }>;
 }
@@ -39,7 +45,8 @@ export interface CouncilBrowserTransportRunInput {
   resurrectionPrompt?: string;
   attachments?: CouncilPromptAttachment[];
   signal?: AbortSignal;
-  onPhase?: CouncilExecutionObserver;
+  onPhase?: CouncilExecutionPhaseObserver;
+  onExecution?: CouncilExecutionObserver;
 }
 export interface CouncilBrowserTransportResult { answer: string; conversationUrl: string; resumed: boolean }
 export interface CouncilBrowserCaptureResult { png: Buffer; conversationUrl: string; health: CouncilObservationHealth; note?: string }
@@ -50,8 +57,9 @@ function validAgentId(value: string): string {
   return id;
 }
 
-function emitPhase(observer: CouncilExecutionObserver | undefined, phase: CouncilExecutionPhase): void {
-  observer?.(phase);
+function emitPhase(legacy: CouncilExecutionPhaseObserver | undefined, observer: CouncilExecutionObserver | undefined, phase: CouncilExecutionPhase): void {
+  legacy?.(phase);
+  observer?.({ type: "phase", phase });
 }
 
 export class CouncilBrowserTransport {
@@ -76,7 +84,7 @@ export class CouncilBrowserTransport {
   private async runAttempt(input: CouncilBrowserTransportRunInput, bindingKey: string): Promise<CouncilBrowserTransportResult> {
     const traceId = `council_${randomUUID().replaceAll("-", "")}`;
     const lease = await this.control.start({ traceId, bindingKey });
-    emitPhase(input.onPhase, "lease-acquired");
+    emitPhase(input.onPhase, input.onExecution, "lease-acquired");
     const heartbeat = this.heartbeat(traceId);
     try {
       let result: { answer: string; conversationUrl: string };
@@ -90,6 +98,7 @@ export class CouncilBrowserTransport {
             ...(input.attachments?.length ? { attachments: input.attachments } : {}),
             signal: input.signal,
             onPhase: input.onPhase,
+            onExecution: input.onExecution,
           });
           resumed = true;
         } catch (error) {
@@ -102,6 +111,7 @@ export class CouncilBrowserTransport {
             ...(input.attachments?.length ? { attachments: input.attachments } : {}),
             signal: input.signal,
             onPhase: input.onPhase,
+            onExecution: input.onExecution,
           });
         }
       } else {
@@ -111,6 +121,7 @@ export class CouncilBrowserTransport {
           ...(input.attachments?.length ? { attachments: input.attachments } : {}),
           signal: input.signal,
           onPhase: input.onPhase,
+          onExecution: input.onExecution,
         });
       }
       await this.control.end({ traceId, status: "completed" });
