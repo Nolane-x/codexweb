@@ -25,6 +25,16 @@ export function registerCouncilMemoryTools(server: McpServer, memory: CouncilMem
     return councilMcpResult({ actor, version: 1, results });
   });
 
+  server.registerTool("council_memory_stats", {
+    title: "Read Council memory statistics",
+    description: "Read bounded memory-index counts and time range globally or for one project room without returning memory text.",
+    inputSchema: { ...actorSchema, room_id: z.string().trim().min(1).max(128).optional() },
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  }, async ({ agent_id, agent_token, room_id }, extra) => {
+    const actor = resolveActor(extra, agent_id, agent_token);
+    return councilMcpResult({ actor, version: 1, stats: memory.stats(room_id) });
+  });
+
   server.registerTool("council_memory_recent", {
     title: "Read recent retained Council memory",
     description: "Read recent safe long-horizon Council memory entries with provenance for project continuity.",
