@@ -15,7 +15,7 @@ import type { CouncilObservationStore } from "./observation-store";
 import { CouncilStore } from "./store";
 
 export const COUNCIL_MCP_SERVER_NAME = "codexweb-council";
-export const COUNCIL_MCP_SERVER_VERSION = "1.6.0";
+export const COUNCIL_MCP_SERVER_VERSION = "1.7.0";
 export const COUNCIL_TOOL_NAMES = [
   "council_join",
   "council_room_upsert",
@@ -44,6 +44,16 @@ export const COUNCIL_TOOL_NAMES = [
   "council_capabilities",
   "council_system_status",
   "council_diagnose",
+  "council_agent_list",
+  "council_room_list",
+  "council_task_list",
+  "council_task_read",
+  "council_decision_list",
+  "council_decision_read",
+  "council_wake_list",
+  "council_agent_health",
+  "council_exceptional_work",
+  "council_memory_stats",
 ] as const;
 
 export interface CouncilMcpServerOptions {
