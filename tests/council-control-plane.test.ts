@@ -4,10 +4,16 @@ import {
   buildCouncilCapabilityManifest,
   buildCouncilDiagnosticReport,
   buildCouncilSystemStatus,
-} from "../src/council/control-plane.ts";
+} from "../src/council/control-plane";
 
 test("capability manifest distinguishes browser fallback from optional connector availability", () => {
-  const manifest = buildCouncilCapabilityManifest({ managedRuntime: true, wakeDelivery: true, observations: true, autonomy: true, memory: true });
+  const manifest = buildCouncilCapabilityManifest({
+    managedRuntime: true,
+    wakeDelivery: true,
+    observations: true,
+    autonomy: true,
+    memory: true,
+  });
   assert.equal(manifest.version, 2);
   assert.equal(manifest.capabilities.browserAutomation, true);
   assert.equal(manifest.capabilities.browserOnlyCouncil, true);
@@ -20,7 +26,9 @@ test("system status contains safe project and health projections without private
   const status = buildCouncilSystemStatus({
     council: { rooms: 1, agents: 3, tasksOpen: 2, activeWakes: 1, decisions: 4 },
     managedProject: { roomId: "core", name: "Alpha", leadAgentId: "lead" },
-    managedAgents: [{ id: "lead", name: "Lead", role: "Coordinator", runtimeStatus: "active", conversationBound: true, checkpointSaved: true }],
+    managedAgents: [
+      { id: "lead", name: "Lead", role: "Coordinator", runtimeStatus: "active", conversationBound: true, checkpointSaved: true },
+    ],
     autonomy: { running: true, activeWork: 2, exceptionalWork: 1, breakerOpenCount: 0 },
     memory: { entries: 42, oldestAt: null, newestAt: "2026-08-31T00:00:00.000Z" },
   });
@@ -32,7 +40,15 @@ test("system status contains safe project and health projections without private
 });
 
 test("diagnostics call out connector uncertainty as non-blocking when browser Council is available", () => {
-  const report = buildCouncilDiagnosticReport({ managedRuntime: true, wakeDelivery: true, autonomyRunning: true, activeProject: true, managedAgentCount: 2, memory: true, observations: true });
+  const report = buildCouncilDiagnosticReport({
+    managedRuntime: true,
+    wakeDelivery: true,
+    autonomyRunning: true,
+    activeProject: true,
+    managedAgentCount: 2,
+    memory: true,
+    observations: true,
+  });
   const connector = report.checks.find(check => check.id === "chatgpt-connector");
   assert.equal(connector?.status, "unverified");
   assert.match(connector?.evidence ?? "", /optional/i);
