@@ -1,6 +1,16 @@
 import { randomUUID } from "node:crypto";
-import type { CouncilExecutionPhase } from "./autonomy-errors";
+import {
+  boundedFailureMessage,
+  classifyCouncilFailure,
+  councilPhaseReached,
+  type CouncilExecutionPhase,
+} from "./autonomy-errors";
 import type { CouncilChatGptState } from "./chatgpt-deep-state";
+import {
+  isTerminalExecutionStatus,
+  type CouncilExecutionControlPlane,
+  type CouncilExecutionRunKind,
+} from "./execution-control-plane";
 import type { CouncilObservationHealth } from "./observation-store";
 
 export class CouncilConversationUnavailableError extends Error {
@@ -54,6 +64,18 @@ export interface CouncilBrowserTransportRunInput {
 export interface CouncilBrowserTransportResult { answer: string; conversationUrl: string; resumed: boolean }
 export interface CouncilBrowserCaptureResult { png: Buffer; conversationUrl: string; health: CouncilObservationHealth; note?: string }
 
+export interface CouncilBrowserTransportOptions {
+  heartbeatMs?: number;
+  execution?: CouncilExecutionControlPlane;
+}
+
+interface ExecutionContext {
+  runId?: string;
+  controller?: AbortController;
+  signal?: AbortSignal;
+  dispose(): void;
+}
+
 function validAgentId(value: string): string {
   const id = value.trim();
   if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(id)) throw new Error("agentId is invalid");
@@ -65,12 +87,40 @@ function emitPhase(legacy: CouncilExecutionPhaseObserver | undefined, observer: 
   observer?.({ type: "phase", phase });
 }
 
+function isAbortError(error: unknown): boolean {
+  return error instanceof DOMException && error.name === "AbortError";
+}
+
+function mergeAbortSignals(signals: Array<AbortSignal | undefined>): { signal?: AbortSignal; dispose(): void } {
+  const active = signals.filter((signal): signal is AbortSignal => Boolean(signal));
+  if (active.length === 0) return { signal: undefined, dispose: () => {} };
+  if (active.length === 1) return { signal: active[0], dispose: () => {} };
+  const controller = new AbortController();
+  const listeners: Array<{ signal: AbortSignal; listener: () => void }> = [];
+  const abort = () => controller.abort();
+  for (const signal of active) {
+    if (signal.aborted) {
+      controller.abort();
+      break;
+    }
+    const listener = abort;
+    signal.addEventListener("abort", listener, { once: true });
+    listeners.push({ signal, listener });
+  }
+  return {
+    signal: controller.signal,
+    dispose: () => {
+      for (const { signal, listener } of listeners) signal.removeEventListener("abort", listener);
+    },
+  };
+}
+
 export class CouncilBrowserTransport {
   private readonly control: CouncilPersistentTurnControl;
   private readonly driver: CouncilPersistentChatDriver;
-  private readonly options: { heartbeatMs?: number };
+  private readonly options: CouncilBrowserTransportOptions;
 
-  constructor(control: CouncilPersistentTurnControl, driver: CouncilPersistentChatDriver, options: { heartbeatMs?: number } = {}) {
+  constructor(control: CouncilPersistentTurnControl, driver: CouncilPersistentChatDriver, options: CouncilBrowserTransportOptions = {}) {
     this.control = control;
     this.driver = driver;
     this.options = options;
@@ -84,9 +134,85 @@ export class CouncilBrowserTransport {
     return { stop: () => clearInterval(timer) };
   }
 
-  private async runAttempt(input: CouncilBrowserTransportRunInput, bindingKey: string): Promise<CouncilBrowserTransportResult> {
+  private beginExecution(input: { agentId: string; kind: CouncilExecutionRunKind; conversationBound?: boolean; externalSignal?: AbortSignal }): ExecutionContext {
+    const execution = this.options.execution;
+    if (!execution) return { signal: input.externalSignal, dispose: () => {} };
+    const controller = new AbortController();
+    const run = execution.createRun({
+      traceId: `execution_${randomUUID().replaceAll("-", "")}`,
+      agentId: input.agentId,
+      kind: input.kind,
+      conversationBound: input.conversationBound,
+    });
+    execution.registerCancellation(run.runId, controller);
+    const merged = mergeAbortSignals([input.externalSignal, controller.signal]);
+    return {
+      runId: run.runId,
+      controller,
+      signal: merged.signal,
+      dispose: () => {
+        merged.dispose();
+        execution.releaseCancellation(run.runId, controller);
+      },
+    };
+  }
+
+  private executionObserver(runId: string | undefined, downstream?: CouncilExecutionTelemetryObserver): CouncilExecutionTelemetryObserver | undefined {
+    const execution = this.options.execution;
+    if (!execution || !runId) return downstream;
+    return observation => {
+      const current = execution.readRun(runId);
+      if (current && !isTerminalExecutionStatus(current.status)) {
+        if (observation.type === "phase") execution.recordPhase(runId, observation.phase);
+        else if (observation.type === "deep-state") execution.recordDeepState(runId, observation);
+        else execution.recordHealth(runId, observation);
+      }
+      downstream?.(observation);
+    };
+  }
+
+  private markSurfaceBound(runId?: string): void {
+    if (!runId) return;
+    this.options.execution?.markSurfaceBound(runId, true);
+  }
+
+  private completeExecution(runId: string | undefined, conversationBound = false): void {
+    if (!runId || !this.options.execution) return;
+    const current = this.options.execution.readRun(runId);
+    if (!current || isTerminalExecutionStatus(current.status)) return;
+    if (conversationBound) this.options.execution.markConversationBound(runId, true);
+    this.options.execution.completeRun(runId);
+  }
+
+  private failExecution(runId: string | undefined, error: unknown): void {
+    const execution = this.options.execution;
+    if (!runId || !execution) return;
+    const current = execution.readRun(runId);
+    if (!current || isTerminalExecutionStatus(current.status) || current.status === "waiting-user") return;
+    if (isAbortError(error)) {
+      execution.abortRun(runId, boundedFailureMessage(error));
+      return;
+    }
+    const classification = classifyCouncilFailure(error);
+    const uncertain = councilPhaseReached(current.phase, "submit-started");
+    execution.failRun(runId, {
+      failureCode: uncertain ? "SUBMISSION_UNCERTAIN" : classification.code,
+      message: boundedFailureMessage(error),
+      uncertain,
+    });
+  }
+
+  private canRetrySurface(runId: string | undefined, error: unknown, signal?: AbortSignal): boolean {
+    if (!(error instanceof CouncilSurfaceUnavailableError) || !this.control.release || signal?.aborted) return false;
+    if (!runId || !this.options.execution) return true;
+    const run = this.options.execution.readRun(runId);
+    return Boolean(run && !isTerminalExecutionStatus(run.status) && !councilPhaseReached(run.phase, "submit-started"));
+  }
+
+  private async runAttempt(input: CouncilBrowserTransportRunInput, bindingKey: string, executionRunId?: string): Promise<CouncilBrowserTransportResult> {
     const traceId = `council_${randomUUID().replaceAll("-", "")}`;
     const lease = await this.control.start({ traceId, bindingKey });
+    this.markSurfaceBound(executionRunId);
     emitPhase(input.onPhase, input.onExecution, "lease-acquired");
     const heartbeat = this.heartbeat(traceId);
     try {
@@ -130,8 +256,8 @@ export class CouncilBrowserTransport {
       await this.control.end({ traceId, status: "completed" });
       return { ...result, resumed };
     } catch (error) {
-      const aborted = (error instanceof DOMException && error.name === "AbortError") || error instanceof CouncilSurfaceUnavailableError;
-      await this.control.end({ traceId, status: aborted ? "aborted" : "failed", message: error instanceof Error ? error.message.slice(0, 500) : String(error).slice(0, 500) }).catch(() => {});
+      const aborted = isAbortError(error) || error instanceof CouncilSurfaceUnavailableError;
+      await this.control.end({ traceId, status: aborted ? "aborted" : "failed", message: boundedFailureMessage(error) }).catch(() => {});
       throw error;
     } finally {
       heartbeat.stop();
@@ -142,14 +268,27 @@ export class CouncilBrowserTransport {
     const agentId = validAgentId(input.agentId);
     if (!input.prompt.trim()) throw new Error("prompt is required");
     if (input.signal?.aborted) throw new DOMException("Council browser turn aborted", "AbortError");
+    const execution = this.beginExecution({ agentId, kind: "turn", conversationBound: Boolean(input.conversationUrl), externalSignal: input.signal });
+    const onExecution = this.executionObserver(execution.runId, input.onExecution);
+    const attemptInput: CouncilBrowserTransportRunInput = { ...input, signal: execution.signal, ...(onExecution ? { onExecution } : {}) };
     const bindingKey = `agent:${agentId}`;
     try {
-      return await this.runAttempt(input, bindingKey);
+      let result: CouncilBrowserTransportResult;
+      try {
+        result = await this.runAttempt(attemptInput, bindingKey, execution.runId);
+      } catch (error) {
+        if (!this.canRetrySurface(execution.runId, error, execution.signal)) throw error;
+        await this.control.release!({ bindingKey });
+        if (execution.signal?.aborted) throw new DOMException("Council browser turn aborted", "AbortError");
+        result = await this.runAttempt(attemptInput, bindingKey, execution.runId);
+      }
+      this.completeExecution(execution.runId, true);
+      return result;
     } catch (error) {
-      if (!(error instanceof CouncilSurfaceUnavailableError) || !this.control.release) throw error;
-      await this.control.release({ bindingKey });
-      if (input.signal?.aborted) throw new DOMException("Council browser turn aborted", "AbortError");
-      return await this.runAttempt(input, bindingKey);
+      this.failExecution(execution.runId, error);
+      throw error;
+    } finally {
+      execution.dispose();
     }
   }
 
@@ -157,67 +296,93 @@ export class CouncilBrowserTransport {
     const agentId = validAgentId(input.agentId);
     if (!this.driver.focus) throw new Error("Council browser driver does not support persistent conversation focus");
     if (input.signal?.aborted) throw new DOMException("Council browser focus aborted", "AbortError");
+    const execution = this.beginExecution({ agentId, kind: "focus", conversationBound: true, externalSignal: input.signal });
     const bindingKey = `agent:${agentId}`;
     const focus = this.driver.focus.bind(this.driver);
-    const run = async (): Promise<{ conversationUrl: string }> => {
+    const attempt = async (): Promise<{ conversationUrl: string }> => {
       const traceId = `focus_${randomUUID().replaceAll("-", "")}`;
       const lease = await this.control.start({ traceId, bindingKey });
+      this.markSurfaceBound(execution.runId);
+      if (execution.runId) this.options.execution?.recordPhase(execution.runId, "lease-acquired");
       const heartbeat = this.heartbeat(traceId);
       try {
-        const result = await focus({ surfaceId: lease.surfaceId, conversationUrl: input.conversationUrl, signal: input.signal });
+        const result = await focus({ surfaceId: lease.surfaceId, conversationUrl: input.conversationUrl, signal: execution.signal });
         await this.control.end({ traceId, status: "completed" });
         return result;
       } catch (error) {
-        const aborted = (error instanceof DOMException && error.name === "AbortError") || error instanceof CouncilSurfaceUnavailableError;
-        await this.control.end({ traceId, status: aborted ? "aborted" : "failed", message: error instanceof Error ? error.message.slice(0, 500) : String(error).slice(0, 500) }).catch(() => {});
+        const aborted = isAbortError(error) || error instanceof CouncilSurfaceUnavailableError;
+        await this.control.end({ traceId, status: aborted ? "aborted" : "failed", message: boundedFailureMessage(error) }).catch(() => {});
         throw error;
       } finally {
         heartbeat.stop();
       }
     };
     try {
-      return await run();
+      let result: { conversationUrl: string };
+      try {
+        result = await attempt();
+      } catch (error) {
+        if (!this.canRetrySurface(execution.runId, error, execution.signal)) throw error;
+        await this.control.release!({ bindingKey });
+        if (execution.signal?.aborted) throw new DOMException("Council browser focus aborted", "AbortError");
+        result = await attempt();
+      }
+      this.completeExecution(execution.runId, true);
+      return result;
     } catch (error) {
-      if (!(error instanceof CouncilSurfaceUnavailableError) || !this.control.release) throw error;
-      await this.control.release({ bindingKey });
-      if (input.signal?.aborted) throw new DOMException("Council browser focus aborted", "AbortError");
-      return await run();
+      this.failExecution(execution.runId, error);
+      throw error;
+    } finally {
+      execution.dispose();
     }
   }
 
   async captureConversation(input: { agentId: string; conversationUrl: string; signal?: AbortSignal }): Promise<CouncilBrowserCaptureResult> {
     const agentId = validAgentId(input.agentId);
     if (!this.driver.capture) throw new Error("Council browser driver does not support observation capture");
-    const capture = this.driver.capture.bind(this.driver);
     if (input.signal?.aborted) throw new DOMException("Council browser capture aborted", "AbortError");
+    const execution = this.beginExecution({ agentId, kind: "capture", conversationBound: true, externalSignal: input.signal });
+    const capture = this.driver.capture.bind(this.driver);
     const bindingKey = `agent:${agentId}`;
     let activeTraceId = "";
     let leased = false;
-    const run = async (): Promise<CouncilBrowserCaptureResult> => {
+    const attempt = async (): Promise<CouncilBrowserCaptureResult> => {
       activeTraceId = `observe_${randomUUID().replaceAll("-", "")}`;
       const lease = await this.control.start({ traceId: activeTraceId, bindingKey });
       leased = true;
+      this.markSurfaceBound(execution.runId);
+      if (execution.runId) this.options.execution?.recordPhase(execution.runId, "lease-acquired");
       const heartbeat = this.heartbeat(activeTraceId);
       try {
-        const result = await capture({ surfaceId: lease.surfaceId, conversationUrl: input.conversationUrl, signal: input.signal });
+        const result = await capture({ surfaceId: lease.surfaceId, conversationUrl: input.conversationUrl, signal: execution.signal });
+        if (execution.runId) this.options.execution?.recordHealth(execution.runId, { health: result.health, ...(result.note ? { note: result.note } : {}) });
         await this.control.end({ traceId: activeTraceId, status: "completed" });
         return result;
       } catch (error) {
-        const aborted = (error instanceof DOMException && error.name === "AbortError") || error instanceof CouncilSurfaceUnavailableError;
-        await this.control.end({ traceId: activeTraceId, status: aborted ? "aborted" : "failed", message: error instanceof Error ? error.message.slice(0, 500) : String(error).slice(0, 500) }).catch(() => {});
+        const aborted = isAbortError(error) || error instanceof CouncilSurfaceUnavailableError;
+        await this.control.end({ traceId: activeTraceId, status: aborted ? "aborted" : "failed", message: boundedFailureMessage(error) }).catch(() => {});
         throw error;
       } finally {
         heartbeat.stop();
       }
     };
     try {
-      return await run();
+      let result: CouncilBrowserCaptureResult;
+      try {
+        result = await attempt();
+      } catch (error) {
+        if (!this.canRetrySurface(execution.runId, error, execution.signal)) throw error;
+        await this.control.release!({ bindingKey });
+        leased = false;
+        result = await attempt();
+      }
+      this.completeExecution(execution.runId, true);
+      return result;
     } catch (error) {
-      if (!(error instanceof CouncilSurfaceUnavailableError) || !this.control.release) throw error;
-      await this.control.release({ bindingKey });
-      leased = false;
-      return await run();
+      this.failExecution(execution.runId, error);
+      throw error;
     } finally {
+      execution.dispose();
       if (leased && this.control.release) await this.control.release({ bindingKey }).catch(() => false);
     }
   }
