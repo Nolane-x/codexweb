@@ -220,7 +220,7 @@ export class CouncilManagedRuntime {
     await this.autonomy.enqueuePreparedSpawn({ sourceAgentId, targetAgentId: child.id, roomId, depth });
   }
 
-  private requireProject(): ManaedCouncilProject {
+  private requireProject(): ManagedCouncilProject {
     const project = this.project.get();
     if (!project) throw new Error("No managed Council project is active; bootstrap the first lead with council_start_project");
     return project;
