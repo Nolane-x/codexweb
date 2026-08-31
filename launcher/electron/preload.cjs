@@ -30,6 +30,7 @@ contextBridge.exposeInMainWorld("codexWebLauncher", {
   cancelTurns: () => ipcRenderer.invoke("launcher:cancel-turns"),
   setupMcp: (input) => ipcRenderer.invoke("launcher:setup-mcp", input),
   bindCurrentChatGptAsLead: (input = {}) => ipcRenderer.invoke("launcher:council-bind-current-lead", input),
+  focusCouncilAgent: (agentId) => ipcRenderer.invoke("launcher:council-agent-focus", agentId),
   councilSupervisorStatus: () => ipcRenderer.invoke("launcher:council-supervisor-status"),
   setCouncilSupervisorManager: (agentId) => ipcRenderer.invoke("launcher:council-supervisor-manager", agentId),
   runCouncilSupervisorNow: () => ipcRenderer.invoke("launcher:council-supervisor-run"),

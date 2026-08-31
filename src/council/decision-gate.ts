@@ -1,3 +1,4 @@
+import { evaluateIndependentCritiqueGate } from "./decision-critique";
 import { isActiveCouncilWake } from "./store";
 import type { CouncilState } from "./types";
 
@@ -10,6 +11,10 @@ export function evaluateCouncilDecisionGate(state: CouncilState, roomId: string)
   const reasons: string[] = [];
   const proposals = state.messages.filter(message => message.roomId === roomId && message.kind === "proposal");
   if (proposals.length === 0) reasons.push("at least one explicit proposal is required before final policy");
+  else {
+    const critique = evaluateIndependentCritiqueGate(state, roomId);
+    if (!critique.satisfied && critique.reason) reasons.push(critique.reason);
+  }
 
   const blockedTasks = state.tasks.filter(task => task.roomId === roomId && task.status === "blocked");
   if (blockedTasks.length > 0) reasons.push(`${blockedTasks.length} blocked task(s) remain unresolved`);

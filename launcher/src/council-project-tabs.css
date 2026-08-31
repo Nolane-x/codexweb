@@ -1,56 +1,50 @@
 .council-project-tabstrip {
-  height: 39px;
-  gap: 2px;
-  padding: 5px 8px 0;
-  align-items: flex-end;
-  background: #191919;
+  flex: 0 0 44px;
+  height: 44px;
+  display: flex;
+  align-items: stretch;
+  gap: 3px;
+  padding: 5px 8px;
+  overflow-x: auto;
+  border-bottom: 1px solid var(--c-line, #252c38);
+  background: #10151c;
   scrollbar-width: thin;
 }
 .council-project-tabstrip button {
   position: relative;
-  display: inline-grid;
-  grid-template-columns: 8px auto auto;
-  align-items: center;
-  gap: 7px;
-  min-width: 118px;
-  max-width: 210px;
-  height: 30px;
+  flex: 0 0 auto;
+  min-width: 154px;
+  max-width: 236px;
+  height: 34px;
   padding: 0 10px;
   border: 1px solid transparent;
-  border-bottom: 0;
-  border-radius: 9px 9px 0 0;
-  background: #202020;
-  color: #a0a0a0;
+  border-radius: 8px;
+  background: transparent;
+  color: #8490a0;
+  display: grid;
+  grid-template-columns: 8px minmax(0,1fr) auto auto;
+  gap: 7px;
+  align-items: center;
+  text-align: left;
+  cursor: pointer;
 }
-.council-project-tabstrip button:hover:not(:disabled) { background: #292929; color: #ddd; }
-.council-project-tabstrip button.active {
-  z-index: 1;
-  border-color: #343434;
-  background: #2b2b2b;
-  color: #f0f0f0;
-}
-.council-project-tabstrip button.parked { opacity: .72; background: #1d1d1d; }
-.council-project-tabstrip button:disabled { cursor: default; }
-.council-project-tabstrip button > i {
-  width: 7px;
-  height: 7px;
-  border-radius: 999px;
-  background: #696969;
-}
-.council-project-tabstrip button > i.tab-home { background: #8ab4ff; }
-.council-project-tabstrip button > i.runtime-active { background: #59d69a; box-shadow: 0 0 0 3px rgba(89,214,154,.1); }
-.council-project-tabstrip button > i.runtime-queued { background: #f1bd61; }
-.council-project-tabstrip button > i.runtime-failed { background: #f07f79; }
-.council-project-tabstrip button > i.runtime-sleeping { background: #777; }
-.council-project-tabstrip button > span {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 10px;
-}
-.council-project-tabstrip button > small {
-  color: #686868;
-  font-size: 8px;
-  text-transform: uppercase;
-}
-.council-project-tabstrip button.active > small { color: #969696; }
+.council-project-tabstrip button:hover:not(:disabled) { background: #18202a; color: #c9d2dd; }
+.council-project-tabstrip button.active { background: #1d2734; border-color: #34465f; color: #f2f6fb; box-shadow: inset 0 -2px #7aa7ff; }
+.council-project-tabstrip button.parked { background: #121820; }
+.council-project-tabstrip button.parked:hover { background: #1b232e; }
+.council-project-tabstrip button:disabled { cursor: not-allowed; opacity: .38; }
+.council-project-tabstrip button > i { width: 7px; height: 7px; border-radius: 50%; background: #6c7787; }
+.council-project-tabstrip button > i.tab-home { background: #7aa7ff; box-shadow: 0 0 0 3px rgba(122,167,255,.08); }
+.council-project-tabstrip button > i.runtime-active { background: #63d6a2; box-shadow: 0 0 0 3px rgba(99,214,162,.08); }
+.council-project-tabstrip button > i.runtime-queued { background: #f1bd67; }
+.council-project-tabstrip button > i.runtime-failed { background: #ef7d7d; }
+.council-project-tabstrip button > i.runtime-sleeping { background: #768295; }
+.council-project-tabstrip button > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; font-weight: 590; }
+.council-project-tabstrip button > small { color: #657184; font-size: 9px; text-transform: uppercase; white-space: nowrap; }
+.council-project-tabstrip button.active > small { color: #9eabc0; }
+.council-project-tabstrip .agent-failure-count { min-width: 16px; height: 16px; border-radius: 8px; background: #5a3035; color: #ffc0c4; display: inline-grid; place-items: center; font-size: 8px; }
+.council-project-tabstrip button.autonomy-health-limited,
+.council-project-tabstrip button.autonomy-health-stalled { box-shadow: inset 0 -2px #f1bd67; }
+.council-project-tabstrip button.autonomy-health-signed-out,
+.council-project-tabstrip button.autonomy-health-quarantined,
+.council-project-tabstrip button.autonomy-health-disconnected { box-shadow: inset 0 -2px #ef7d7d; }

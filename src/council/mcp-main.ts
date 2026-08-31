@@ -133,6 +133,10 @@ export async function runCouncilMcpMain(args: string[]): Promise<void> {
             wakeId: wake.id,
           };
         },
+        focusAgent: async (agentId: string) => {
+          await managedRuntime!.focusAgentConversation(agentId);
+          return { agentId, focused: true };
+        },
         ...(supervisor ? {
           supervisor: {
             status: () => supervisor!.status(),

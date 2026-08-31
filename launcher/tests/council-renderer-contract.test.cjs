@@ -14,14 +14,18 @@ const preload = readFileSync(join(root, "electron", "preload.cjs"), "utf8");
 const css = readFileSync(join(root, "src", "council.css"), "utf8");
 const indexHtml = readFileSync(join(root, "index.html"), "utf8");
 
-test("Council UI is additive and preserves the existing App", () => {
+test("Mission Control preserves the existing App without mounting legacy Council overlays", () => {
   assert.match(main, /import \{ App \} from "\.\/App"/);
   assert.match(main, /<App\s*\/>/);
-  assert.match(main, /<CouncilDock\s*\/>/);
-  assert.match(main, /<CouncilAgentsPanel\s*\/>/);
-  assert.match(main, /<CouncilSetupPanel\s*\/>/);
+  assert.doesNotMatch(main, /<CouncilDock\s*\/>/);
+  assert.doesNotMatch(main, /<CouncilAgentsPanel\s*\/>/);
+  assert.doesNotMatch(main, /<CouncilSetupPanel\s*\/>/);
   assert.match(main, /<CouncilUpdatePrompt\s*\/>/);
   assert.match(main, /import "\.\/styles\.css"/);
+  assert.match(main, /import "\.\/council-4-shell-foundation\.css"/);
+  assert.match(main, /import "\.\/council-4-workspaces\.css"/);
+  assert.match(main, /import "\.\/council-4-detail\.css"/);
+  assert.match(main, /import "\.\/council-4-responsive\.css"/);
 });
 
 test("Council renderer consumes main-process shared projection instead of treating local runtime as Council truth", () => {

@@ -63,6 +63,50 @@ describe("CouncilBrowserTransport", () => {
     expect(events).toEqual(["start:agent:bob:1", "end:completed"]);
   });
 
+  test("focuses a persisted conversation without submitting and keeps the agent binding", async () => {
+    const { events, control } = fixture();
+    let sends = 0;
+    const driver = {
+      async resume() { sends += 1; throw new Error("focus must not submit"); },
+      async create() { sends += 1; throw new Error("focus must not create"); },
+      async focus(input: { surfaceId: string; conversationUrl: string }) {
+        expect(input.surfaceId).toBe("surface-1");
+        expect(input.conversationUrl).toBe("https://chatgpt.com/c/bob");
+        return { conversationUrl: input.conversationUrl };
+      },
+    };
+    const transport = new CouncilBrowserTransport(control, driver as any, { heartbeatMs: 60_000 });
+    const result = await transport.focusConversation({ agentId: "bob", conversationUrl: "https://chatgpt.com/c/bob" });
+    expect(result.conversationUrl).toBe("https://chatgpt.com/c/bob");
+    expect(sends).toBe(0);
+    expect(events).toEqual(["start:agent:bob:1", "end:completed"]);
+  });
+
+  test("focus releases one stale surface and reacquires exactly once", async () => {
+    const { events, control } = fixture();
+    let focuses = 0;
+    const driver = {
+      async resume() { throw new Error("unused"); },
+      async create() { throw new Error("unused"); },
+      async focus(input: { surfaceId: string; conversationUrl: string }) {
+        focuses += 1;
+        if (focuses === 1) throw new CouncilSurfaceUnavailableError("stale parked surface");
+        expect(input.surfaceId).toBe("surface-2");
+        return { conversationUrl: input.conversationUrl };
+      },
+    };
+    const transport = new CouncilBrowserTransport(control, driver as any, { heartbeatMs: 60_000 });
+    await transport.focusConversation({ agentId: "bob", conversationUrl: "https://chatgpt.com/c/bob" });
+    expect(focuses).toBe(2);
+    expect(events).toEqual([
+      "start:agent:bob:1",
+      "end:aborted",
+      "release:agent:bob",
+      "start:agent:bob:2",
+      "end:completed",
+    ]);
+  });
+
   test("captures a conversation read-only and releases its persistent browser binding", async () => {
     const { events, control } = fixture();
     let sends = 0;

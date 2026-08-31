@@ -5,7 +5,7 @@ import { actorSchema } from "../src/council/mcp-shared";
 describe("Council MCP contract", () => {
   test("exposes collaboration, managed-agent, repo-binding, continuity, observation, autonomy and memory tools", () => {
     expect(COUNCIL_MCP_SERVER_NAME).toBe("codexweb-council");
-    expect(COUNCIL_MCP_SERVER_VERSION).toBe("1.5.0");
+    expect(COUNCIL_MCP_SERVER_VERSION).toBe("1.7.0");
     for (const name of [
       "council_join",
       "council_say",
@@ -25,6 +25,19 @@ describe("Council MCP contract", () => {
       "council_autonomy_audit",
       "council_memory_search",
       "council_memory_recent",
+      "council_capabilities",
+      "council_system_status",
+      "council_diagnose",
+      "council_agent_list",
+      "council_room_list",
+      "council_task_list",
+      "council_task_read",
+      "council_decision_list",
+      "council_decision_read",
+      "council_wake_list",
+      "council_agent_health",
+      "council_exceptional_work",
+      "council_memory_stats",
     ]) expect(COUNCIL_TOOL_NAMES).toContain(name as never);
     expect(new Set(COUNCIL_TOOL_NAMES).size).toBe(COUNCIL_TOOL_NAMES.length);
   });

@@ -1,0 +1,16 @@
+@media (max-width: 1000px) {
+  .council-shell { grid-template-columns: 190px minmax(0,1fr); }
+  .mission-page { padding: 24px 22px 30px; }
+  .mission-kpis { grid-template-columns: repeat(2,minmax(0,1fr)); }
+  .overview-grid, .diagnostic-grid { grid-template-columns: 1fr; }
+  .work-split { grid-template-columns: 1fr; overflow: auto; }
+  .work-tasks { border-right: 0; border-bottom: 1px solid var(--c-line); height: auto; min-height: 420px; }
+  .work-autonomy { height: auto; min-height: 600px; }
+  .council-titlebar { grid-template-columns: 1fr auto auto; }
+  .council-titlebar-health small { display: none; }
+}
+
+.connection-list article.status-healthy > i, .council-statusbar button.status-healthy > i { background: #4e9d7d; opacity: .72; box-shadow: none; }
+.connection-list article.status-degraded, .connection-list article.status-blocked, .connection-list article.status-offline { background: linear-gradient(90deg, rgba(241,189,103,.055), transparent 42%); }
+.connection-list article.status-degraded > i { background: var(--c-warn); opacity: 1; box-shadow: 0 0 0 3px rgba(241,189,103,.08); }
+.connection-list article.status-blocked > i, .connection-list article.status-offline > i { background: var(--c-danger); opacity: 1; box-shadow: 0 0 0 3px rgba(239,125,125,.08); }

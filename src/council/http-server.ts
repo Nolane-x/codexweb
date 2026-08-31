@@ -68,6 +68,7 @@ export interface CouncilOwnerMemoryApi {
 export interface CouncilOwnerApi {
   token: () => string | undefined;
   startLead: (input: { conversationUrl: string; projectName: string }) => Promise<unknown>;
+  focusAgent: (agentId: string) => Promise<unknown>;
   supervisor?: CouncilOwnerSupervisorApi;
   autonomy?: CouncilOwnerAutonomyApi;
   memory?: CouncilOwnerMemoryApi;
@@ -238,6 +239,8 @@ export function startCouncilHttpServer(
               const projectName = ownerString(body, "project_name", 160);
               return ownerJson(await options.owner!.startLead({ conversationUrl, projectName }));
             }
+
+            if (url.pathname === "/api/owner/agent/focus") return ownerJson(await options.owner!.focusAgent(ownerId(body, "agent_id")));
 
             if (url.pathname.startsWith("/api/owner/autonomy/")) {
               const autonomy = options.owner?.autonomy;

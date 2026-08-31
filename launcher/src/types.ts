@@ -356,6 +356,7 @@ export interface LauncherApi {
     lead: { id: string; name: string; role: string; conversationBound: boolean };
     wakeId: string;
   }>;
+  focusCouncilAgent(agentId: string): Promise<{ agentId: string; focused: true }>;
   councilSupervisorStatus(): Promise<CouncilSupervisorStatusView>;
   setCouncilSupervisorManager(agentId: string | null): Promise<CouncilSupervisorStatusView>;
   runCouncilSupervisorNow(): Promise<unknown>;

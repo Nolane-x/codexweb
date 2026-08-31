@@ -28,6 +28,7 @@ export type CouncilExecutionObserver = (phase: CouncilExecutionPhase) => void;
 export interface CouncilPersistentChatDriver {
   resume(input: { surfaceId: string; conversationUrl: string; prompt: string; attachments?: CouncilPromptAttachment[]; signal?: AbortSignal; onPhase?: CouncilExecutionObserver }): Promise<{ answer: string; conversationUrl: string }>;
   create(input: { surfaceId: string; prompt: string; attachments?: CouncilPromptAttachment[]; signal?: AbortSignal; onPhase?: CouncilExecutionObserver }): Promise<{ answer: string; conversationUrl: string }>;
+  focus?(input: { surfaceId: string; conversationUrl: string; signal?: AbortSignal }): Promise<{ conversationUrl: string }>;
   capture?(input: { surfaceId: string; conversationUrl: string; signal?: AbortSignal }): Promise<{ png: Buffer; conversationUrl: string; health: CouncilObservationHealth; note?: string }>;
 }
 
@@ -135,6 +136,38 @@ export class CouncilBrowserTransport {
       await this.control.release({ bindingKey });
       if (input.signal?.aborted) throw new DOMException("Council browser turn aborted", "AbortError");
       return await this.runAttempt(input, bindingKey);
+    }
+  }
+
+  async focusConversation(input: { agentId: string; conversationUrl: string; signal?: AbortSignal }): Promise<{ conversationUrl: string }> {
+    const agentId = validAgentId(input.agentId);
+    if (!this.driver.focus) throw new Error("Council browser driver does not support persistent conversation focus");
+    if (input.signal?.aborted) throw new DOMException("Council browser focus aborted", "AbortError");
+    const bindingKey = `agent:${agentId}`;
+    const focus = this.driver.focus.bind(this.driver);
+    const run = async (): Promise<{ conversationUrl: string }> => {
+      const traceId = `focus_${randomUUID().replaceAll("-", "")}`;
+      const lease = await this.control.start({ traceId, bindingKey });
+      const heartbeat = this.heartbeat(traceId);
+      try {
+        const result = await focus({ surfaceId: lease.surfaceId, conversationUrl: input.conversationUrl, signal: input.signal });
+        await this.control.end({ traceId, status: "completed" });
+        return result;
+      } catch (error) {
+        const aborted = (error instanceof DOMException && error.name === "AbortError") || error instanceof CouncilSurfaceUnavailableError;
+        await this.control.end({ traceId, status: aborted ? "aborted" : "failed", message: error instanceof Error ? error.message.slice(0, 500) : String(error).slice(0, 500) }).catch(() => {});
+        throw error;
+      } finally {
+        heartbeat.stop();
+      }
+    };
+    try {
+      return await run();
+    } catch (error) {
+      if (!(error instanceof CouncilSurfaceUnavailableError) || !this.control.release) throw error;
+      await this.control.release({ bindingKey });
+      if (input.signal?.aborted) throw new DOMException("Council browser focus aborted", "AbortError");
+      return await run();
     }
   }
 
