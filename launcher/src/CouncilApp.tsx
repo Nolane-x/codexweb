@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
-import type { BrowserState, CouncilAutonomyStatusView, CouncilRuntimeViewState, CouncilSupervisorStatusView, LauncherSnapshot, LogRecord, ManagedAgentView } from "./types";
+import type { BrowserState, CouncilAutonomyStatusView, CouncilExecutionRunView, CouncilRuntimeViewState, CouncilSupervisorStatusView, LauncherSnapshot, LogRecord, ManagedAgentView } from "./types";
 import { deriveCouncilConnections, type CouncilConnectionNode, type CouncilConnectorObservation } from "./councilConnectionModel";
+import { ExecutionBadge, ExecutionInspector, executionByAgent, useCouncilExecutionRuns } from "./CouncilExecutionInspector";
 import "./council-shell.css";
 import "./council-36.css";
 
@@ -27,13 +28,14 @@ type Council36Api = {
 
 const api = window.codexWebLauncher;
 const api36 = api as (typeof api & Council36Api);
-type View = "overview" | "chatgpt" | "agents" | "work" | "memory" | "connections" | "diagnostics" | "settings";
+type View = "overview" | "chatgpt" | "agents" | "work" | "executions" | "memory" | "connections" | "diagnostics" | "settings";
 
 const NAV: Array<{ id: View; label: string; hint: string; group: "workspace" | "intelligence" | "system" }> = [
   { id: "overview", label: "Overview", hint: "Mission and attention", group: "workspace" },
   { id: "chatgpt", label: "ChatGPT", hint: "Persistent conversations", group: "workspace" },
   { id: "agents", label: "Agents", hint: "Team and capability", group: "workspace" },
   { id: "work", label: "Work", hint: "Tasks and autonomy", group: "workspace" },
+  { id: "executions", label: "Executions", hint: "Live browser control", group: "workspace" },
   { id: "memory", label: "Memory", hint: "Provenance knowledge", group: "intelligence" },
   { id: "connections", label: "Connections", hint: "Transport truth", group: "system" },
   { id: "diagnostics", label: "Diagnostics", hint: "Evidence and repair", group: "system" },
@@ -77,6 +79,7 @@ export function CouncilApp() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [connectorObservation, setConnectorObservation] = useState<CouncilConnectorObservation>("unknown");
+  const executionState = useCouncilExecutionRuns(snapshot?.state.onboardingComplete ? api : undefined);
 
   useEffect(() => {
     if (!api) return;
@@ -127,6 +130,8 @@ export function CouncilApp() {
   const roomId = useMemo(() => projectRoomId(councilRuntime), [councilRuntime]);
   const project = useMemo(() => managedProject(councilRuntime), [councilRuntime]);
   const healthByAgent = useMemo(() => new Map((autonomy?.health ?? []).map(health => [health.agentId, health])), [autonomy]);
+  const latestExecutionByAgent = useMemo(() => executionByAgent(executionState.runs), [executionState.runs]);
+  const executionAttention = executionState.runs.filter(run => run.status === "uncertain" || run.status === "failed" || run.status === "waiting-user").length;
   const tabByAgent = useMemo(() => new Map((browser?.tabs ?? []).filter(tab => tab.agentId).map(tab => [tab.agentId!, tab])), [browser]);
   const otherTabs = useMemo(() => (browser?.tabs ?? []).filter(tab => tab.id !== "home" && !tab.agentId), [browser]);
   const connections = useMemo(() => councilRuntime ? deriveCouncilConnections({ runtime: councilRuntime, browser, connectorObservation }) : [], [councilRuntime, browser, connectorObservation]);
@@ -177,15 +182,16 @@ export function CouncilApp() {
 
     <aside className="council-sidebar">
       <div className="council-sidebar-project"><span className="eyebrow">ACTIVE PROJECT</span><strong>{project?.name ?? "No managed project"}</strong><p>{project?.mission ?? "Bind a persistent ChatGPT conversation as Lead to start a managed Council project."}</p></div>
-      {(["workspace", "intelligence", "system"] as const).map(group => <div className="council-nav-group" key={group}><span>{group}</span><nav>{NAV.filter(item => item.group === group).map(item => <button key={item.id} className={view === item.id ? "active" : ""} aria-current={view === item.id ? "page" : undefined} onClick={() => setView(item.id)}><i aria-hidden="true" /><div><strong>{item.label}</strong><small>{item.hint}</small></div>{item.id === "work" && (autonomy?.queue.totalActive ?? 0) > 0 ? <em>{autonomy!.queue.totalActive}</em> : null}</button>)}</nav></div>)}
-      <div className="council-sidebar-summary"><div><span>Team</span><strong>{agents.length} agents</strong></div><div><span>Attention</span><strong className={(autonomy?.breakerOpenCount ?? 0) > 0 ? "warn" : ""}>{(autonomy?.breakerOpenCount ?? 0) + (autonomy?.dispatcher.uncertain ?? 0)} items</strong></div></div>
+      {(["workspace", "intelligence", "system"] as const).map(group => <div className="council-nav-group" key={group}><span>{group}</span><nav>{NAV.filter(item => item.group === group).map(item => <button key={item.id} className={view === item.id ? "active" : ""} aria-current={view === item.id ? "page" : undefined} onClick={() => setView(item.id)}><i aria-hidden="true" /><div><strong>{item.label}</strong><small>{item.hint}</small></div>{item.id === "work" && (autonomy?.queue.totalActive ?? 0) > 0 ? <em>{autonomy!.queue.totalActive}</em> : null}{item.id === "executions" && executionAttention > 0 ? <em>{executionAttention}</em> : null}</button>)}</nav></div>)}
+      <div className="council-sidebar-summary"><div><span>Team</span><strong>{agents.length} agents</strong></div><div><span>Attention</span><strong className={(autonomy?.breakerOpenCount ?? 0) + executionAttention > 0 ? "warn" : ""}>{(autonomy?.breakerOpenCount ?? 0) + (autonomy?.dispatcher.uncertain ?? 0) + executionAttention} items</strong></div></div>
     </aside>
 
     <section className="council-workspace">
-      {view === "overview" ? <Overview project={project} agents={agents} autonomy={autonomy} connections={connections} healthByAgent={healthByAgent} onOpenAgent={openAgent} onNavigate={setView} /> : null}
+      {view === "overview" ? <Overview project={project} agents={agents} autonomy={autonomy} connections={connections} healthByAgent={healthByAgent} executionByAgent={latestExecutionByAgent} onOpenAgent={openAgent} onNavigate={setView} /> : null}
       {view === "chatgpt" ? <ChatWorkspace browser={browser} agents={agents} autonomy={autonomy} healthByAgent={healthByAgent} tabByAgent={tabByAgent} otherTabs={otherTabs} busy={busy} authenticated={authenticated} projectBound={Boolean(project)} run={run} onBindLead={bindCurrentLead} onOpenAgent={openAgent} setSlot={setSlot} /> : null}
-      {view === "agents" ? <AgentsWorkspace agents={agents} healthByAgent={healthByAgent} tabByAgent={tabByAgent} onOpenAgent={openAgent} /> : null}
+      {view === "agents" ? <AgentsWorkspace agents={agents} healthByAgent={healthByAgent} executionByAgent={latestExecutionByAgent} tabByAgent={tabByAgent} onOpenAgent={openAgent} /> : null}
       {view === "work" ? <WorkWorkspace runtime={councilRuntime} roomId={roomId} autonomy={autonomy} agents={agents} /> : null}
+      {view === "executions" ? <ExecutionInspector runs={executionState.runs} loading={executionState.loading} loadError={executionState.error} refreshRuns={executionState.refresh} /> : null}
       {view === "memory" ? <MemoryPanel roomId={roomId} /> : null}
       {view === "connections" ? <ConnectionsWorkspace connections={connections} snapshot={snapshot} busy={busy} onVerify={verifyConnections} onOpenConnectorSetup={() => void run(() => api.openExternal(snapshot.urls.connectors))} /> : null}
       {view === "diagnostics" ? <DiagnosticsWorkspace connections={connections} logs={logs} busy={busy} onVerify={verifyConnections} onDoctor={() => void run(async () => { const report = await api.doctor(); if (!report.ok) throw new Error(report.checks.filter(check => check.status !== "ok").map(check => check.message).join(" · ")); })} /> : null}
@@ -201,12 +207,13 @@ function PageHeader({ eyebrow, title, body, actions }: { eyebrow: string; title:
   return <header className="mission-page-header"><div><span className="page-context">{eyebrow}</span><h2>{title}</h2><p>{body}</p></div>{actions ? <div className="page-actions">{actions}</div> : null}</header>;
 }
 
-function Overview({ project, agents, autonomy, connections, healthByAgent, onOpenAgent, onNavigate }: { project: ReturnType<typeof managedProject>; agents: ManagedAgentView[]; autonomy: CouncilAutonomyStatusView | null; connections: CouncilConnectionNode[]; healthByAgent: Map<string, CouncilAutonomyStatusView["health"][number]>; onOpenAgent: (agent: ManagedAgentView) => void; onNavigate: (view: View) => void }) {
-  const attention = connections.filter(item => item.status !== "healthy").length + (autonomy?.breakerOpenCount ?? 0) + (autonomy?.dispatcher.uncertain ?? 0);
+function Overview({ project, agents, autonomy, connections, healthByAgent, executionByAgent, onOpenAgent, onNavigate }: { project: ReturnType<typeof managedProject>; agents: ManagedAgentView[]; autonomy: CouncilAutonomyStatusView | null; connections: CouncilConnectionNode[]; healthByAgent: Map<string, CouncilAutonomyStatusView["health"][number]>; executionByAgent: Map<string, CouncilExecutionRunView>; onOpenAgent: (agent: ManagedAgentView) => void; onNavigate: (view: View) => void }) {
+  const executionAttention = [...executionByAgent.values()].filter(run => run.status === "uncertain" || run.status === "failed" || run.status === "waiting-user").length;
+  const attention = connections.filter(item => item.status !== "healthy").length + (autonomy?.breakerOpenCount ?? 0) + (autonomy?.dispatcher.uncertain ?? 0) + executionAttention;
   const active = agents.filter(agent => agent.runtimeStatus === "active" || agent.runtimeStatus === "queued").length;
   return <div className="mission-page"><PageHeader eyebrow="Mission control" title={project?.name ?? "Council overview"} body={project?.mission ?? "Start with a persistent Project conversation, then let Council keep durable team state separate from browser surfaces."} actions={<button className="primary" onClick={() => onNavigate("chatgpt")}>Open ChatGPT workspace</button>} />
-    <section className="mission-kpis"><article><span>TEAM</span><strong>{agents.length}</strong><small>{active} active or queued</small></article><article><span>DURABLE WORK</span><strong>{autonomy?.queue.totalActive ?? 0}</strong><small>{autonomy?.dispatcher.activeWorkItemId ? "one browser operation executing" : "scheduler idle"}</small></article><article><span>NEEDS ATTENTION</span><strong className={attention ? "warn" : "good"}>{attention}</strong><small>{autonomy?.dispatcher.uncertain ?? 0} uncertain · {autonomy?.breakerOpenCount ?? 0} breakers</small></article><article><span>SYSTEMS</span><strong>{connections.filter(item => item.status === "healthy").length}/{connections.length}</strong><small>independently observed layers</small></article></section>
-    <div className="overview-grid"><section className="mission-section"><div className="section-heading"><div><span className="eyebrow">TEAM NOW</span><h3>Managed agents</h3></div><button onClick={() => onNavigate("agents")}>View all</button></div><div className="agent-list-compact">{agents.length ? agents.slice(0,6).map(agent => { const health = healthByAgent.get(agent.id); return <button key={agent.id} onClick={() => onOpenAgent(agent)}><i className={`agent-dot runtime-${agent.runtimeStatus}`} /><div><strong>{agent.name}</strong><small>{agent.role}</small></div><em className={`health-${health?.state ?? agent.runtimeStatus}`}>{compactHealth(health?.state ?? agent.runtimeStatus)}</em></button>; }) : <EmptyLine text="No managed agents yet" />}</div></section>
+    <section className="mission-kpis"><article><span>TEAM</span><strong>{agents.length}</strong><small>{active} active or queued</small></article><article><span>DURABLE WORK</span><strong>{autonomy?.queue.totalActive ?? 0}</strong><small>{autonomy?.dispatcher.activeWorkItemId ? "one browser operation executing" : "scheduler idle"}</small></article><article><span>NEEDS ATTENTION</span><strong className={attention ? "warn" : "good"}>{attention}</strong><small>{autonomy?.dispatcher.uncertain ?? 0} uncertain · {autonomy?.breakerOpenCount ?? 0} breakers · {executionAttention} executions</small></article><article><span>SYSTEMS</span><strong>{connections.filter(item => item.status === "healthy").length}/{connections.length}</strong><small>independently observed layers</small></article></section>
+    <div className="overview-grid"><section className="mission-section"><div className="section-heading"><div><span className="eyebrow">TEAM NOW</span><h3>Managed agents</h3></div><button onClick={() => onNavigate("agents")}>View all</button></div><div className="agent-list-compact">{agents.length ? agents.slice(0,6).map(agent => { const health = healthByAgent.get(agent.id); const execution = executionByAgent.get(agent.id); return <button key={agent.id} onClick={() => onOpenAgent(agent)}><i className={`agent-dot runtime-${agent.runtimeStatus}`} /><div><strong>{agent.name}</strong><small>{agent.role}</small></div><em className={`health-${health?.state ?? agent.runtimeStatus}`}>{compactHealth(health?.state ?? agent.runtimeStatus)}</em><ExecutionBadge run={execution} compact /></button>; }) : <EmptyLine text="No managed agents yet" />}</div></section>
       <section className="mission-section"><div className="section-heading"><div><span className="eyebrow">CONNECTION TRUTH</span><h3>System layers</h3></div><button onClick={() => onNavigate("connections")}>Inspect</button></div><ConnectionList connections={connections} compact /></section></div>
   </div>;
 }
@@ -218,9 +225,9 @@ function ChatWorkspace({ browser, agents, autonomy, healthByAgent, tabByAgent, o
     <div className="council-browser-slot" ref={setSlot}>{!authenticated ? <div className="council-browser-empty"><span>ChatGPT session required</span><strong>Sign in once in the embedded browser.</strong><p>Managed conversations persist locally and can be reopened without exposing their private URL to the renderer.</p></div> : null}</div></div>;
 }
 
-function AgentsWorkspace({ agents, healthByAgent, tabByAgent, onOpenAgent }: { agents: ManagedAgentView[]; healthByAgent: Map<string, CouncilAutonomyStatusView["health"][number]>; tabByAgent: Map<string, BrowserState["tabs"][number]>; onOpenAgent: (agent: ManagedAgentView) => void }) {
+function AgentsWorkspace({ agents, healthByAgent, executionByAgent, tabByAgent, onOpenAgent }: { agents: ManagedAgentView[]; healthByAgent: Map<string, CouncilAutonomyStatusView["health"][number]>; executionByAgent: Map<string, CouncilExecutionRunView>; tabByAgent: Map<string, BrowserState["tabs"][number]>; onOpenAgent: (agent: ManagedAgentView) => void }) {
   return <div className="mission-page"><PageHeader eyebrow="Team" title="Managed agents" body="Persistent identity is independent from the physical browser surface. Saved conversations stay actionable even while the agent is parked." />
-    <div className="agent-grid">{agents.length ? agents.map(agent => { const health = healthByAgent.get(agent.id); const tab = tabByAgent.get(agent.id); return <article key={agent.id}><div className="agent-card-head"><i className={`agent-avatar runtime-${agent.runtimeStatus}`}>{agent.name.slice(0,1).toUpperCase()}</i><div><h3>{agent.name}</h3><p>{agent.role}</p></div><em className={`health-${health?.state ?? agent.runtimeStatus}`}>{compactHealth(health?.state ?? agent.runtimeStatus)}</em></div><p className="agent-mandate">{agent.mandate}</p><dl><div><dt>Conversation</dt><dd>{agent.conversationBound ? (tab ? "Open surface" : "Saved · parked") : "Not bound"}</dd></div><div><dt>Runtime</dt><dd>{agent.runtimeStatus}</dd></div><div><dt>Failures</dt><dd>{health?.consecutiveFailures ?? 0}</dd></div><div><dt>Authority</dt><dd>{agent.permissions.length} permissions</dd></div></dl><button className="primary" disabled={!agent.conversationBound && !tab} onClick={() => onOpenAgent(agent)}>{tab ? "Open conversation" : "Reopen saved conversation"}</button></article>; }) : <div className="mission-empty">No managed agents yet.</div>}</div></div>;
+    <div className="agent-grid">{agents.length ? agents.map(agent => { const health = healthByAgent.get(agent.id); const tab = tabByAgent.get(agent.id); const execution = executionByAgent.get(agent.id); return <article key={agent.id}><div className="agent-card-head"><i className={`agent-avatar runtime-${agent.runtimeStatus}`}>{agent.name.slice(0,1).toUpperCase()}</i><div><h3>{agent.name}</h3><p>{agent.role}</p></div><em className={`health-${health?.state ?? agent.runtimeStatus}`}>{compactHealth(health?.state ?? agent.runtimeStatus)}</em></div><p className="agent-mandate">{agent.mandate}</p><dl><div><dt>Conversation</dt><dd>{agent.conversationBound ? (tab ? "Open surface" : "Saved · parked") : "Not bound"}</dd></div><div><dt>Runtime</dt><dd>{agent.runtimeStatus}</dd></div><div><dt>Execution</dt><dd><ExecutionBadge run={execution} compact /></dd></div><div><dt>Failures</dt><dd>{health?.consecutiveFailures ?? 0}</dd></div><div><dt>Authority</dt><dd>{agent.permissions.length} permissions</dd></div></dl><button className="primary" disabled={!agent.conversationBound && !tab} onClick={() => onOpenAgent(agent)}>{tab ? "Open conversation" : "Reopen saved conversation"}</button></article>; }) : <div className="mission-empty">No managed agents yet.</div>}</div></div>;
 }
 
 function WorkWorkspace({ runtime, roomId, autonomy, agents }: { runtime: CouncilRuntimeViewState | null; roomId: string | null; autonomy: CouncilAutonomyStatusView | null; agents: ManagedAgentView[] }) {
