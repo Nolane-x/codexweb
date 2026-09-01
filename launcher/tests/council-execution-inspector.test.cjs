@@ -28,7 +28,8 @@ test("execution inspector consumes only the trusted typed launcher API", () => {
     "focusCouncilExecutionAgent",
     "captureCouncilExecutionAgent",
     "retryCouncilExecution",
-  ]) assert.match(inspector, new RegExp(`api!?\\.${method}\\(`), `${method} must be used by the inspector`);
+  ]) assert.match(inspector, new RegExp(`(?:api!?|launcherApi)\\.${method}\\(`), `${method} must be used through the typed launcher API`);
+  assert.match(inspector, /launcherApi:\s*LauncherApi\s*\|\s*undefined/);
   assert.match(types, /CouncilExecutionRunView/);
   assert.match(types, /CouncilExecutionEventView/);
   assert.match(types, /CouncilExecutionCommandReceiptView/);
