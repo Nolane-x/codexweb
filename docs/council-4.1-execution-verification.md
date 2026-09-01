@@ -1,6 +1,7 @@
 # Council 4.1 Execution Control Plane — Verification Record
 
 Date: 2026-09-01
+Status: **COMPLETE — MERGED AND RELEASED AS v4.1.0**
 
 ## Verified code boundary
 
@@ -9,9 +10,9 @@ Date: 2026-09-01
 - Verified Council 4.1 code head: `46a60de3aa5a3f2686afa524bfbd626539ecf985`
 - Pull-request merge commit exercised by the final code CI: `8fb881fb631ccfc33f9cf4995e4ca4e214253614`
 - Final code CI: run #363, run id `33467807496`
-- CI URL: https://github.com/Nolane-x/codexweb/actions/runs/33467807496
-
-The verification record itself is a documentation-only follow-up commit. The final pull-request gate must therefore run again on the documentation-inclusive head before merge.
+- Council 4.1 final integration merge: `859b4c7a`
+- Release-policy hotfix merge: `d7e50ed890288b416219511e694530ab079ad50e`
+- Stable v4.1.0 release merge: `440bdfda86a9dda2e909b9f2e527433c0652fff7`
 
 ## Cross-platform gate
 
@@ -26,7 +27,7 @@ GitHub Actions `actionlint` also passed. Windows additionally passed the PowerSh
 
 ## Fresh test evidence from run #363
 
-The Ubuntu verification job on the final code boundary reported:
+The Ubuntu verification job on the final Council 4.1 code boundary reported:
 
 - core test suite: **496 passed, 0 failed**, across 88 files, with 2022 `expect()` calls;
 - launcher suite: **199 passed, 0 failed**;
@@ -36,7 +37,7 @@ The Ubuntu verification job on the final code boundary reported:
 - relocatable runtime smoke reported `RELOCATABLE_RUNTIME_SMOKE_OK`;
 - packaged launcher smoke reported `PACKAGED_LAUNCHER_SMOKE_OK linux/x64`.
 
-The same CI workflow then completed package and packaged-smoke gates successfully on Windows and macOS as well.
+The same CI workflow completed package and packaged-smoke gates successfully on Windows and macOS as well.
 
 ## Council 4.1 authority and safety evidence
 
@@ -84,8 +85,24 @@ The verified Mission Control integration adds `Executions` as one destination in
 - Task 6 owner/Electron verification: CI #361, run id `33467019501`, passed verify/package/packaged-smoke on Windows, macOS and Ubuntu.
 - Task 7 isolated Inspector verification: CI #362, run id `33467169486`, passed verify/package/packaged-smoke on Windows, macOS and Ubuntu.
 - The exact Task 7 integration object verified by #362 was `46a60de3aa5a3f2686afa524bfbd626539ecf985`, with parents `b2d0ab1bb633d2773bdf013cc97ab07df8f9a14e` and `8b0b2757d11b40337d0d831f5a1590fb0033bb39`.
-- Final code verification on the main Council 4.1 pull-request context: CI #363, run id `33467807496`, completed successfully across all required gates.
+- Final code verification on the Council 4.1 pull-request context: CI #363, run id `33467807496`, completed successfully across all required gates.
+- Final integration PR #17 was merged after its documentation-inclusive CI passed.
+- Post-merge Council 4.1 CI on `main` passed on Windows, macOS and Ubuntu.
+- Release-policy no-op behavior was fixed and independently verified before the stable version bump.
 
-## Merge status
+## Stable v4.1.0 release evidence
 
-The Council 4.1 **code boundary** at `46a60de3aa5a3f2686afa524bfbd626539ecf985` satisfies the implementation plan's cross-platform verification criteria. This record is intentionally a documentation-only follow-up. Merge is authorized only after the final pull-request CI also passes on the documentation-inclusive head and `main` is rechecked for base drift.
+- Release preparation PR #20 exact head: `987703eecc47091a763a5149590a33731c856dcd`.
+- Pre-merge release CI #371 passed `actionlint` and `verify → package → packaged smoke` on Windows, macOS and Ubuntu.
+- PR #20 merged to `main` as `440bdfda86a9dda2e909b9f2e527433c0652fff7`.
+- Post-merge CI #372, run id `33488257655`, completed with conclusion `success` on that exact merge commit.
+- Release workflow #37, run id `33488257699`, completed with conclusion `success` on the same merge commit.
+- All four native release build jobs passed verification, packaging and packaged smoke. The two macOS jobs also passed embedded-runtime and packaged-application signature verification.
+- The publish job generated `checksums.txt`, passed `Verify every published asset is checksummed`, created tag `v4.1.0`, and published the GitHub release.
+- `refs/tags/v4.1.0` resolves exactly to `440bdfda86a9dda2e909b9f2e527433c0652fff7`.
+- GitHub reports `v4.1.0` as the latest stable release (`draft=false`, `prerelease=false`).
+- Published assets include the four runtime archives, Windows x64 installer, Linux x64 AppImage, macOS ARM64/x64 DMG and ZIP packages, installer scripts, license/notices, demo media and `checksums.txt`; GitHub exposes SHA-256 digests for uploaded assets.
+
+## Final status
+
+Council 4.1 has satisfied all eight implementation-plan tasks and all required safety, CI, package, smoke, signature, checksum, integration and publication gates. The roadmap is closed. Stable release `v4.1.0` is published and is the current latest release.
