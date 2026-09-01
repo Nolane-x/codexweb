@@ -65,6 +65,17 @@ export interface CouncilOwnerMemoryApi {
   clearProject: (projectRoomId: string) => unknown;
 }
 
+export interface CouncilOwnerExecutionApi {
+  runs: () => unknown;
+  run: (runId: string) => unknown;
+  events: (runId: string) => unknown;
+  receipts: () => unknown;
+  cancel: (runId: string) => unknown;
+  focus: (agentId: string) => Promise<unknown>;
+  capture: (agentId: string) => Promise<unknown>;
+  retry: (runId: string) => Promise<unknown>;
+}
+
 export interface CouncilOwnerApi {
   token: () => string | undefined;
   startLead: (input: { conversationUrl: string; projectName: string }) => Promise<unknown>;
@@ -72,6 +83,7 @@ export interface CouncilOwnerApi {
   supervisor?: CouncilOwnerSupervisorApi;
   autonomy?: CouncilOwnerAutonomyApi;
   memory?: CouncilOwnerMemoryApi;
+  execution?: CouncilOwnerExecutionApi;
 }
 
 function canonicalPublicWake(wake: CouncilWakeEvent): CouncilWakeEvent {
@@ -181,6 +193,13 @@ function ownerLimit(body: Record<string, unknown>, fallback: number, max: number
   return Math.min(max, raw);
 }
 
+function ownerExactKeys(body: Record<string, unknown>, allowed: readonly string[]): void {
+  const allowedKeys = new Set(allowed);
+  for (const key of Object.keys(body)) {
+    if (!allowedKeys.has(key)) throw new Error(`owner request field is not allowed: ${key}`);
+  }
+}
+
 export function startCouncilHttpServer(
   store: CouncilStore,
   options: { port?: number; onError?: (message: string) => void; managedSnapshot?: () => CouncilManagedPublicView | null; owner?: CouncilOwnerApi } = {},
@@ -241,6 +260,44 @@ export function startCouncilHttpServer(
             }
 
             if (url.pathname === "/api/owner/agent/focus") return ownerJson(await options.owner!.focusAgent(ownerId(body, "agent_id")));
+
+            if (url.pathname.startsWith("/api/owner/execution/")) {
+              const execution = options.owner?.execution;
+              if (!execution) return ownerJson("Council execution operator controls are unavailable", 503);
+              if (url.pathname === "/api/owner/execution/runs") {
+                ownerExactKeys(body, []);
+                return ownerJson(execution.runs());
+              }
+              if (url.pathname === "/api/owner/execution/read") {
+                ownerExactKeys(body, ["run_id"]);
+                return ownerJson(execution.run(ownerId(body, "run_id")));
+              }
+              if (url.pathname === "/api/owner/execution/events") {
+                ownerExactKeys(body, ["run_id"]);
+                return ownerJson(execution.events(ownerId(body, "run_id")));
+              }
+              if (url.pathname === "/api/owner/execution/receipts") {
+                ownerExactKeys(body, []);
+                return ownerJson(execution.receipts());
+              }
+              if (url.pathname === "/api/owner/execution/cancel") {
+                ownerExactKeys(body, ["run_id"]);
+                return ownerJson(execution.cancel(ownerId(body, "run_id")));
+              }
+              if (url.pathname === "/api/owner/execution/focus") {
+                ownerExactKeys(body, ["agent_id"]);
+                return ownerJson(await execution.focus(ownerId(body, "agent_id")));
+              }
+              if (url.pathname === "/api/owner/execution/capture") {
+                ownerExactKeys(body, ["agent_id"]);
+                return ownerJson(await execution.capture(ownerId(body, "agent_id")));
+              }
+              if (url.pathname === "/api/owner/execution/retry") {
+                ownerExactKeys(body, ["run_id"]);
+                return ownerJson(await execution.retry(ownerId(body, "run_id")));
+              }
+              return ownerJson("Unknown execution owner operation", 404);
+            }
 
             if (url.pathname.startsWith("/api/owner/autonomy/")) {
               const autonomy = options.owner?.autonomy;

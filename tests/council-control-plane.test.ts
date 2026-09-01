@@ -13,6 +13,7 @@ test("capability manifest distinguishes browser fallback from optional connector
     observations: true,
     autonomy: true,
     memory: true,
+    execution: true,
   });
   assert.equal(manifest.version, 2);
   assert.equal(manifest.capabilities.browserAutomation, true);
@@ -20,6 +21,7 @@ test("capability manifest distinguishes browser fallback from optional connector
   assert.equal(manifest.capabilities.chatGptConnector.mode, "optional");
   assert.equal(manifest.capabilities.chatGptConnector.requiredForManagedTurns, false);
   assert.equal(manifest.capabilities.autonomy, true);
+  assert.equal(manifest.capabilities.execution, true);
 });
 
 test("system status contains safe project and health projections without private continuity fields", () => {
@@ -48,6 +50,7 @@ test("diagnostics call out connector uncertainty as non-blocking when browser Co
     managedAgentCount: 2,
     memory: true,
     observations: true,
+    execution: true,
   });
   const connector = report.checks.find(check => check.id === "chatgpt-connector");
   assert.equal(connector?.status, "unverified");
@@ -55,4 +58,7 @@ test("diagnostics call out connector uncertainty as non-blocking when browser Co
   assert.match(connector?.nextAction ?? "", /browser-only/i);
   const browser = report.checks.find(check => check.id === "browser-control");
   assert.equal(browser?.status, "ready");
+  const execution = report.checks.find(check => check.id === "execution-control");
+  assert.equal(execution?.status, "ready");
+  assert.match(execution?.evidence ?? "", /submission boundary|execution/i);
 });

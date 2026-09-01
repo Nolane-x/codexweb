@@ -89,6 +89,23 @@ async function focusAgentConversation(agentId, options = {}) {
   return await ownerRequest("agent/focus", { agent_id: assertId(agentId, "agentId") }, { ...options, timeoutMs: options.timeoutMs ?? OWNER_LONG_REQUEST_TIMEOUT_MS });
 }
 
+async function listExecutionRuns(options = {}) { return await ownerRequest("execution/runs", {}, options); }
+async function readExecutionRun(runId, options = {}) { return await ownerRequest("execution/read", { run_id: assertId(runId, "runId") }, options); }
+async function readExecutionEvents(runId, options = {}) { return await ownerRequest("execution/events", { run_id: assertId(runId, "runId") }, options); }
+async function readExecutionReceipts(options = {}) { return await ownerRequest("execution/receipts", {}, options); }
+async function cancelExecutionRun(runId, options = {}) {
+  return await ownerRequest("execution/cancel", { run_id: assertId(runId, "runId") }, { ...options, timeoutMs: options.timeoutMs ?? OWNER_LONG_REQUEST_TIMEOUT_MS });
+}
+async function focusExecutionAgent(agentId, options = {}) {
+  return await ownerRequest("execution/focus", { agent_id: assertId(agentId, "agentId") }, { ...options, timeoutMs: options.timeoutMs ?? OWNER_LONG_REQUEST_TIMEOUT_MS });
+}
+async function captureExecutionAgent(agentId, options = {}) {
+  return await ownerRequest("execution/capture", { agent_id: assertId(agentId, "agentId") }, { ...options, timeoutMs: options.timeoutMs ?? OWNER_LONG_REQUEST_TIMEOUT_MS });
+}
+async function retryExecutionRun(runId, options = {}) {
+  return await ownerRequest("execution/retry", { run_id: assertId(runId, "runId") }, { ...options, timeoutMs: options.timeoutMs ?? OWNER_LONG_REQUEST_TIMEOUT_MS });
+}
+
 async function supervisorStatus(options = {}) { return await ownerRequest("supervisor/status", {}, options); }
 async function setSupervisorManager(agentId, options = {}) { return await ownerRequest("supervisor/manager", { agent_id: agentId || null }, options); }
 async function runSupervisorNow(options = {}) { return await ownerRequest("supervisor/run", {}, { ...options, timeoutMs: options.timeoutMs ?? OWNER_LONG_REQUEST_TIMEOUT_MS }); }
@@ -129,11 +146,15 @@ module.exports = {
   autonomyStatus,
   bindCurrentConversationAsLead,
   cancelExceptionalWork,
+  cancelExecutionRun,
+  captureExecutionAgent,
   focusAgentConversation,
+  focusExecutionAgent,
   clearObservations,
   clearProjectMemory,
   deleteObservation,
   listExceptionalWork,
+  listExecutionRuns,
   listObservations,
   memoryRecent,
   memorySearch,
@@ -141,9 +162,13 @@ module.exports = {
   observationStorageStats,
   ownerDescriptorPath,
   ownerRequest,
+  readExecutionEvents,
+  readExecutionReceipts,
+  readExecutionRun,
   readObservation,
   readObservationScreenshot,
   readOwnerDescriptor,
+  retryExecutionRun,
   retryUncertainWork,
   runSupervisorNow,
   setSupervisorManager,

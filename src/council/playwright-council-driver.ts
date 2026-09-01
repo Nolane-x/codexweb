@@ -8,7 +8,7 @@ import {
   assertAuthenticatedChatGptPage,
 } from "../chatgpt-session";
 import { connectLauncherBrowserHost } from "../launcher-browser-host";
-import type { CouncilExecutionObserver, CouncilPersistentChatDriver, CouncilPromptAttachment } from "./browser-transport";
+import type { CouncilExecutionObserver, CouncilExecutionPhaseObserver, CouncilPersistentChatDriver, CouncilPromptAttachment } from "./browser-transport";
 import { CouncilConversationUnavailableError, CouncilSurfaceUnavailableError } from "./browser-transport";
 import { assertChatGptConversationUrl } from "./conversation-registry";
 import { classifyCouncilConnectorObservation } from "./chatgpt-connector-policy";
@@ -25,15 +25,32 @@ const DIAGNOSTIC_SAMPLE_MS = 1_500;
 const INSERT_CHUNK_CHARS = 12_000;
 const CONNECTOR_MENU_TIMEOUT_MS = 4_000;
 
-interface DriverInput { surfaceId: string; prompt: string; attachments?: CouncilPromptAttachment[]; signal?: AbortSignal; onPhase?: CouncilExecutionObserver }
+interface DriverInput {
+  surfaceId: string;
+  prompt: string;
+  attachments?: CouncilPromptAttachment[];
+  signal?: AbortSignal;
+  onPhase?: CouncilExecutionPhaseObserver;
+  onExecution?: CouncilExecutionObserver;
+}
 interface ResumeInput extends DriverInput { conversationUrl: string }
 
 function abortIfNeeded(signal?: AbortSignal): void {
   if (signal?.aborted) throw new DOMException("Council ChatGPT turn aborted", "AbortError");
 }
 
-function phase(observer: CouncilExecutionObserver | undefined, value: Parameters<CouncilExecutionObserver>[0]): void {
-  observer?.(value);
+function phase(legacy: CouncilExecutionPhaseObserver | undefined, observer: CouncilExecutionObserver | undefined, value: Parameters<CouncilExecutionPhaseObserver>[0]): void {
+  legacy?.(value);
+  observer?.({ type: "phase", phase: value });
+}
+
+function emitDeepState(observer: CouncilExecutionObserver | undefined, state: CouncilChatGptStateResult): void {
+  observer?.({
+    type: "deep-state",
+    state: state.state,
+    confidence: Math.max(0, Math.min(1, state.confidence)),
+    reason: state.reason.replace(/[\r\n\t]+/g, " ").trim().slice(0, 500),
+  });
 }
 
 async function visibleComposer(page: Page): Promise<Locator> {
@@ -67,14 +84,19 @@ async function councilConnectorIsSelected(composer: Locator): Promise<boolean> {
 /** Prefer the real ChatGPT connector when it is available, but keep ordinary Council
  * browser turns usable without it. The action footer is still processed by the local Council
  * runtime, so connector absence is capability degradation rather than a transport failure. */
-async function trySelectCouncilConnector(page: Page, signal?: AbortSignal, onPhase?: CouncilExecutionObserver): Promise<{ composer: Locator; connectorSelected: boolean }> {
+async function trySelectCouncilConnector(
+  page: Page,
+  signal?: AbortSignal,
+  onPhase?: CouncilExecutionPhaseObserver,
+  onExecution?: CouncilExecutionObserver,
+): Promise<{ composer: Locator; connectorSelected: boolean }> {
   let composer = await visibleComposer(page);
   await composer.fill("");
   const selectedExactCount = await selectedCouncilConnector(composer).evaluateAll(elements => elements.filter(element => element.getAttribute("data-keyword") === COUNCIL_CONNECTOR_NAME).length);
   const initial = classifyCouncilConnectorObservation({ selectedExactCount, exactMenuRowCount: 0 });
   if (initial === "ambiguous") throw new Error("ChatGPT exposed duplicate CodexWeb Council connector selections");
   if (initial === "selected") {
-    phase(onPhase, "connector-selected");
+    phase(onPhase, onExecution, "connector-selected");
     return { composer, connectorSelected: true };
   }
 
@@ -100,7 +122,7 @@ async function trySelectCouncilConnector(page: Page, signal?: AbortSignal, onPha
       const selectedComposer = await visibleComposer(page);
       await selectedCouncilConnector(selectedComposer).waitFor({ state: "visible", timeout: 10_000 });
       if (!await councilConnectorIsSelected(selectedComposer)) throw new Error("ChatGPT did not commit the CodexWeb Council connector selection");
-      phase(onPhase, "connector-selected");
+      phase(onPhase, onExecution, "connector-selected");
       return { composer: selectedComposer, connectorSelected: true };
     }
   }
@@ -111,8 +133,14 @@ async function trySelectCouncilConnector(page: Page, signal?: AbortSignal, onPha
   return { composer, connectorSelected: false };
 }
 
-async function attachExactPrompt(page: Page, prompt: string, signal?: AbortSignal, onPhase?: CouncilExecutionObserver): Promise<Locator> {
-  const { composer, connectorSelected } = await trySelectCouncilConnector(page, signal, onPhase);
+async function attachExactPrompt(
+  page: Page,
+  prompt: string,
+  signal?: AbortSignal,
+  onPhase?: CouncilExecutionPhaseObserver,
+  onExecution?: CouncilExecutionObserver,
+): Promise<Locator> {
+  const { composer, connectorSelected } = await trySelectCouncilConnector(page, signal, onPhase, onExecution);
   await composer.focus();
   await page.keyboard.press(process.platform === "darwin" ? "Meta+ArrowDown" : "Control+End");
   const transported = ` ${prompt}`;
@@ -134,7 +162,7 @@ async function attachExactPrompt(page: Page, prompt: string, signal?: AbortSigna
     observed = await composerText(composer);
     if (observed === prompt) {
       if (connectorSelected && !await councilConnectorIsSelected(composer)) throw new Error("CodexWeb Council connector selection disappeared while attaching the prompt");
-      phase(onPhase, "prompt-attached");
+      phase(onPhase, onExecution, "prompt-attached");
       return composer;
     }
     await new Promise(resolve => setTimeout(resolve, 50));
@@ -144,9 +172,15 @@ async function attachExactPrompt(page: Page, prompt: string, signal?: AbortSigna
   throw new Error(`ChatGPT Council composer did not preserve the complete prompt (expectedChars=${prompt.length}, actualChars=${observed.length}, commonPrefixChars=${prefix})`);
 }
 
-async function attachFiles(page: Page, composer: Locator, attachments: CouncilPromptAttachment[] = [], onPhase?: CouncilExecutionObserver): Promise<void> {
+async function attachFiles(
+  page: Page,
+  composer: Locator,
+  attachments: CouncilPromptAttachment[] = [],
+  onPhase?: CouncilExecutionPhaseObserver,
+  onExecution?: CouncilExecutionObserver,
+): Promise<void> {
   if (attachments.length === 0) {
-    phase(onPhase, "files-attached");
+    phase(onPhase, onExecution, "files-attached");
     return;
   }
   if (attachments.length > 20) throw new Error("Council manager turn supports at most 20 screenshot attachments");
@@ -157,7 +191,7 @@ async function attachFiles(page: Page, composer: Locator, attachments: CouncilPr
   for (const file of attachments) {
     await form.getByRole("group", { name: file.name, exact: true }).waitFor({ state: "visible", timeout: 60_000 }).catch(() => {});
   }
-  phase(onPhase, "files-attached");
+  phase(onPhase, onExecution, "files-attached");
 }
 
 async function currentAnswerText(responseTurn: Locator): Promise<string> {
@@ -218,10 +252,17 @@ function throwDeepStateFailure(state: CouncilChatGptStateResult): void {
   if (state.state === "STALLED") throw new Error(`ChatGPT Council response stalled: ${state.reason}`);
 }
 
-async function sendAndWait(page: Page, prompt: string, attachments: CouncilPromptAttachment[] | undefined, signal?: AbortSignal, onPhase?: CouncilExecutionObserver): Promise<string> {
+async function sendAndWait(
+  page: Page,
+  prompt: string,
+  attachments: CouncilPromptAttachment[] | undefined,
+  signal?: AbortSignal,
+  onPhase?: CouncilExecutionPhaseObserver,
+  onExecution?: CouncilExecutionObserver,
+): Promise<string> {
   abortIfNeeded(signal);
-  const composer = await attachExactPrompt(page, prompt, signal, onPhase);
-  await attachFiles(page, composer, attachments, onPhase);
+  const composer = await attachExactPrompt(page, prompt, signal, onPhase, onExecution);
+  await attachFiles(page, composer, attachments, onPhase, onExecution);
   const assistantTurns = page.locator(CHATGPT_ASSISTANT_TURN_SELECTOR);
   const userTurns = page.locator(CHATGPT_USER_TURN_SELECTOR);
   const initialAssistantCount = await assistantTurns.count();
@@ -231,7 +272,7 @@ async function sendAndWait(page: Page, prompt: string, attachments: CouncilPromp
   await send.waitFor({ state: "visible", timeout: 20_000 });
   if (!await send.isEnabled()) throw new Error("ChatGPT Council send button is disabled after prompt attachment");
   const submittedAt = Date.now();
-  phase(onPhase, "submit-started");
+  phase(onPhase, onExecution, "submit-started");
   await send.press("Enter");
 
   const submissionDeadline = Date.now() + SUBMISSION_TIMEOUT_MS;
@@ -245,7 +286,7 @@ async function sendAndWait(page: Page, prompt: string, attachments: CouncilPromp
     ]);
     if (users > initialUserCount || assistants > initialAssistantCount || running > 0) {
       submissionObserved = true;
-      phase(onPhase, "submit-observed");
+      phase(onPhase, onExecution, "submit-observed");
       break;
     }
     await new Promise(resolve => setTimeout(resolve, 50));
@@ -288,6 +329,7 @@ async function sendAndWait(page: Page, prompt: string, attachments: CouncilPromp
       lastDiagnosticAt = now;
     }
 
+    const previousStateName = previousState?.state;
     const nextState = deriveCouncilChatGptState({
       composerPresent: true,
       responsePresent: present,
@@ -302,14 +344,15 @@ async function sendAndWait(page: Page, prompt: string, attachments: CouncilPromp
       lastAssistantMutationAt,
       lastStatusMutationAt,
     }, { submittedAt }, previousState, now);
+    if (nextState.state !== previousStateName) emitDeepState(onExecution, nextState);
     previousState = nextState;
 
     if (present && !emittedStreaming && ["THINKING", "DEEP_THINKING", "STREAMING", "TOOL_RUNNING", "COMPLETING", "COMPLETED"].includes(nextState.state)) {
       emittedStreaming = true;
-      phase(onPhase, "response-streaming");
+      phase(onPhase, onExecution, "response-streaming");
     }
     if (nextState.state === "COMPLETED") {
-      phase(onPhase, "response-complete");
+      phase(onPhase, onExecution, "response-complete");
       return nextState.lastAssistantText;
     }
     throwDeepStateFailure(nextState);
@@ -389,8 +432,8 @@ export class PlaywrightCouncilChatDriver implements CouncilPersistentChatDriver 
         if (state === "unavailable") throw new CouncilConversationUnavailableError(`ChatGPT conversation is unavailable: ${expected}`);
         throw error;
       }
-      phase(input.onPhase, "conversation-ready");
-      const answer = await sendAndWait(page, input.prompt, input.attachments, input.signal, input.onPhase);
+      phase(input.onPhase, input.onExecution, "conversation-ready");
+      const answer = await sendAndWait(page, input.prompt, input.attachments, input.signal, input.onPhase, input.onExecution);
       return { answer, conversationUrl: assertChatGptConversationUrl(page.url()) };
     } finally {
       await connection.browser.close().catch(() => {});
@@ -409,8 +452,8 @@ export class PlaywrightCouncilChatDriver implements CouncilPersistentChatDriver 
         if (surfaceUnavailable(page)) throw new CouncilSurfaceUnavailableError(`Council browser surface unavailable before composer became ready (${page.url()})`);
         throw error;
       }
-      phase(input.onPhase, "conversation-ready");
-      const answer = await sendAndWait(page, input.prompt, input.attachments, input.signal, input.onPhase);
+      phase(input.onPhase, input.onExecution, "conversation-ready");
+      const answer = await sendAndWait(page, input.prompt, input.attachments, input.signal, input.onPhase, input.onExecution);
       return { answer, conversationUrl: await waitForConversationUrl(page) };
     } finally {
       await connection.browser.close().catch(() => {});

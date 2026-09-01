@@ -1,9 +1,11 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import type { CouncilAutonomyKernel } from "./autonomy-kernel";
+import type { CouncilExecutionControlPlane } from "./execution-control-plane";
 import type { CouncilManagedRuntime } from "./managed-runtime";
 import type { CouncilMemoryIndex } from "./memory-index";
 import { registerCouncilAutonomyTools } from "./mcp-tools-autonomy";
+import { registerCouncilExecutionTools } from "./mcp-tools-execution";
 import { registerCouncilManagedTools } from "./mcp-tools-managed";
 import { registerCouncilMemoryTools } from "./mcp-tools-memory";
 import { registerCouncilObservationTools } from "./mcp-tools-observations";
@@ -15,7 +17,7 @@ import type { CouncilObservationStore } from "./observation-store";
 import { CouncilStore } from "./store";
 
 export const COUNCIL_MCP_SERVER_NAME = "codexweb-council";
-export const COUNCIL_MCP_SERVER_VERSION = "1.7.0";
+export const COUNCIL_MCP_SERVER_VERSION = "1.8.0";
 export const COUNCIL_TOOL_NAMES = [
   "council_join",
   "council_room_upsert",
@@ -54,6 +56,14 @@ export const COUNCIL_TOOL_NAMES = [
   "council_agent_health",
   "council_exceptional_work",
   "council_memory_stats",
+  "council_execution_list",
+  "council_execution_read",
+  "council_execution_events",
+  "council_execution_receipts",
+  "council_execution_cancel",
+  "council_execution_focus",
+  "council_execution_capture",
+  "council_execution_retry",
 ] as const;
 
 export interface CouncilMcpServerOptions {
@@ -62,6 +72,7 @@ export interface CouncilMcpServerOptions {
   observations?: CouncilObservationStore;
   autonomy?: CouncilAutonomyKernel;
   memory?: CouncilMemoryIndex;
+  execution?: CouncilExecutionControlPlane;
 }
 
 export function createCouncilMcpServer(store: CouncilStore, options: CouncilMcpServerOptions = {}): McpServer {
@@ -77,11 +88,19 @@ export function createCouncilMcpServer(store: CouncilStore, options: CouncilMcpS
   if (options.observations) registerCouncilObservationTools(server, options.observations, resolveActor);
   if (options.autonomy) registerCouncilAutonomyTools(server, options.autonomy, resolveActor);
   if (options.memory) registerCouncilMemoryTools(server, options.memory, resolveActor);
+  if (options.execution && options.managedRuntime) registerCouncilExecutionTools(server, { execution: options.execution, runtime: options.managedRuntime }, resolveActor);
   return server;
 }
 
-export async function runCouncilMcpServer(options: { storePath?: string; store?: CouncilStore; wakeDelivery?: CouncilWakeDelivery; managedRuntime?: CouncilManagedRuntime; observations?: CouncilObservationStore; autonomy?: CouncilAutonomyKernel; memory?: CouncilMemoryIndex }): Promise<void> {
+export async function runCouncilMcpServer(options: { storePath?: string; store?: CouncilStore; wakeDelivery?: CouncilWakeDelivery; managedRuntime?: CouncilManagedRuntime; observations?: CouncilObservationStore; autonomy?: CouncilAutonomyKernel; memory?: CouncilMemoryIndex; execution?: CouncilExecutionControlPlane }): Promise<void> {
   const store = options.store ?? (options.storePath ? new CouncilStore(options.storePath) : undefined);
   if (!store) throw new Error("Council MCP requires a store or storePath");
-  await createCouncilMcpServer(store, { wakeDelivery: options.wakeDelivery, managedRuntime: options.managedRuntime, observations: options.observations, autonomy: options.autonomy, memory: options.memory }).connect(new StdioServerTransport());
+  await createCouncilMcpServer(store, {
+    wakeDelivery: options.wakeDelivery,
+    managedRuntime: options.managedRuntime,
+    observations: options.observations,
+    autonomy: options.autonomy,
+    memory: options.memory,
+    execution: options.execution,
+  }).connect(new StdioServerTransport());
 }

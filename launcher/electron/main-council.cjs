@@ -28,18 +28,26 @@ const {
   autonomyStatus,
   bindCurrentConversationAsLead,
   cancelExceptionalWork,
+  cancelExecutionRun,
+  captureExecutionAgent,
   clearObservations,
   clearProjectMemory,
   deleteObservation,
   focusAgentConversation,
+  focusExecutionAgent,
   listExceptionalWork,
+  listExecutionRuns,
   listObservations,
   memoryRecent,
   memorySearch,
   memoryStats,
   observationStorageStats,
+  readExecutionEvents,
+  readExecutionReceipts,
+  readExecutionRun,
   readObservation,
   readObservationScreenshot,
+  retryExecutionRun,
   retryUncertainWork,
   runSupervisorNow,
   setSupervisorManager,
@@ -266,6 +274,14 @@ function registerIpc({ logger, stateStore }) {
     return await bindCurrentConversationAsLead({ conversationUrl, projectName: projectName || "ChatGPT Project" });
   });
   handle("launcher:council-agent-focus", (_event, agentId) => focusAgentConversation(safeCouncilId(agentId, "agentId")));
+  handle("launcher:council-execution-runs", () => listExecutionRuns());
+  handle("launcher:council-execution-read", (_event, runId) => readExecutionRun(safeCouncilId(runId, "runId")));
+  handle("launcher:council-execution-events", (_event, runId) => readExecutionEvents(safeCouncilId(runId, "runId")));
+  handle("launcher:council-execution-receipts", () => readExecutionReceipts());
+  handle("launcher:council-execution-cancel", (_event, runId) => cancelExecutionRun(safeCouncilId(runId, "runId")));
+  handle("launcher:council-execution-focus", (_event, agentId) => focusExecutionAgent(safeCouncilId(agentId, "agentId")));
+  handle("launcher:council-execution-capture", (_event, agentId) => captureExecutionAgent(safeCouncilId(agentId, "agentId")));
+  handle("launcher:council-execution-retry", (_event, runId) => retryExecutionRun(safeCouncilId(runId, "runId")));
   handle("launcher:council-supervisor-status", () => supervisorStatus());
   handle("launcher:council-supervisor-manager", (_event, agentId) => {
     if (agentId !== null && agentId !== undefined && (typeof agentId !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(agentId))) throw new Error("Council manager agent id is invalid");

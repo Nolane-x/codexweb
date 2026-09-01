@@ -135,6 +135,102 @@ export interface ManagedAgentView {
   runtimeStatus: "active" | "sleeping" | "queued" | "failed";
 }
 
+export type CouncilExecutionRunKindView = "turn" | "focus" | "capture";
+export type CouncilExecutionRunStatusView = "queued" | "active" | "waiting-user" | "completed" | "failed" | "aborted" | "uncertain";
+export type CouncilExecutionRetrySafetyView = "safe-before-submit" | "forbidden-after-submit" | "operator-resolution-required";
+export type CouncilExecutionPhaseView =
+  | "lease-acquired"
+  | "conversation-ready"
+  | "connector-selected"
+  | "prompt-attached"
+  | "files-attached"
+  | "submit-started"
+  | "submit-observed"
+  | "response-streaming"
+  | "response-complete";
+export type CouncilExecutionDeepStateView =
+  | "DISCOVERED"
+  | "IDLE"
+  | "QUEUED"
+  | "THINKING"
+  | "DEEP_THINKING"
+  | "STREAMING"
+  | "TOOL_RUNNING"
+  | "WAITING_USER"
+  | "COMPLETING"
+  | "COMPLETED"
+  | "RATE_LIMITED"
+  | "CONVERSATION_LIMIT"
+  | "CONNECTION_LOST"
+  | "STALLED"
+  | "FAILED"
+  | "DOM_DRIFT";
+export type CouncilExecutionFailureCodeView =
+  | "CAPACITY_BUSY"
+  | "SURFACE_UNAVAILABLE"
+  | "CONVERSATION_UNAVAILABLE"
+  | "CHATGPT_LIMITED"
+  | "CHATGPT_SIGNED_OUT"
+  | "CONNECTION_FAILED"
+  | "RESPONSE_STALLED"
+  | "SUBMISSION_UNCERTAIN"
+  | "POLICY_BUDGET_EXHAUSTED"
+  | "WORK_LEASE_EXPIRED"
+  | "WORK_ITEM_STALE"
+  | "MANAGER_UNAVAILABLE"
+  | "UNKNOWN";
+export type CouncilExecutionCommandTypeView = "cancel" | "focus" | "capture" | "retry";
+export interface CouncilExecutionRunView {
+  runId: string;
+  traceId: string;
+  agentId: string;
+  kind: CouncilExecutionRunKindView;
+  status: CouncilExecutionRunStatusView;
+  phase?: CouncilExecutionPhaseView;
+  deepState?: CouncilExecutionDeepStateView;
+  startedAt: string;
+  updatedAt: string;
+  completedAt?: string;
+  retrySafety: CouncilExecutionRetrySafetyView;
+  failureCode?: CouncilExecutionFailureCodeView;
+  failureMessage?: string;
+  surfaceBound: boolean;
+  conversationBound: boolean;
+  eventCount: number;
+}
+export interface CouncilExecutionEventView {
+  eventId: string;
+  runId: string;
+  kind: "run-created" | "phase" | "deep-state" | "health" | "command-requested" | "command-accepted" | "command-rejected" | "failure" | "completed";
+  at: string;
+  phase?: CouncilExecutionPhaseView;
+  deepState?: CouncilExecutionDeepStateView;
+  health?: CouncilObservationHealthView;
+  confidence?: number;
+  failureCode?: CouncilExecutionFailureCodeView;
+  message?: string;
+}
+export interface CouncilExecutionCommandReceiptView {
+  receiptId: string;
+  commandType: CouncilExecutionCommandTypeView;
+  actorId: string;
+  targetRunId?: string;
+  targetAgentId?: string;
+  requestedAt: string;
+  outcome: "accepted" | "rejected";
+  reason: string;
+  resultingRunId?: string;
+}
+export interface CouncilExecutionCommandResultView {
+  run: CouncilExecutionRunView;
+  receipt: CouncilExecutionCommandReceiptView;
+}
+export interface CouncilExecutionRetryResultView {
+  sourceRun: CouncilExecutionRunView;
+  resultingRun: CouncilExecutionRunView;
+  receipt: CouncilExecutionCommandReceiptView;
+}
+
 export type CouncilAutonomyHealthStateView =
   | "healthy"
   | "sleeping"
@@ -357,6 +453,14 @@ export interface LauncherApi {
     wakeId: string;
   }>;
   focusCouncilAgent(agentId: string): Promise<{ agentId: string; focused: true }>;
+  councilExecutionRuns(): Promise<CouncilExecutionRunView[]>;
+  councilExecutionRun(runId: string): Promise<CouncilExecutionRunView>;
+  councilExecutionEvents(runId: string): Promise<CouncilExecutionEventView[]>;
+  councilExecutionReceipts(): Promise<CouncilExecutionCommandReceiptView[]>;
+  cancelCouncilExecution(runId: string): Promise<CouncilExecutionCommandResultView>;
+  focusCouncilExecutionAgent(agentId: string): Promise<CouncilExecutionCommandResultView>;
+  captureCouncilExecutionAgent(agentId: string): Promise<CouncilExecutionCommandResultView>;
+  retryCouncilExecution(runId: string): Promise<CouncilExecutionRetryResultView>;
   councilSupervisorStatus(): Promise<CouncilSupervisorStatusView>;
   setCouncilSupervisorManager(agentId: string | null): Promise<CouncilSupervisorStatusView>;
   runCouncilSupervisorNow(): Promise<unknown>;
