@@ -88,7 +88,7 @@ function canRetry(run: CouncilExecutionRunView): boolean {
 }
 
 function canCancel(run: CouncilExecutionRunView): boolean {
-  return run.status === "active" && run.status !== "completed" && run.status !== "uncertain";
+  return run.status === "active";
 }
 
 function eventSummary(event: CouncilExecutionEventView): string {
