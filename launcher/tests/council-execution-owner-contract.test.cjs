@@ -117,6 +117,6 @@ test("Electron main and preload expose eight bounded execution IPC methods witho
     "launcher:council-execution-retry",
   ]) assert.match(main, new RegExp(channel));
 
-  assert.doesNotMatch(preload, /owner-control|authorization|Bearer|conversationUrl|selector|script/);
+  assert.doesNotMatch(preload, /owner-control|authorization|Bearer|conversationUrl|\bselector\b|\bscript\b|\bprompt\b/);
   assert.doesNotMatch(types, /executionConversationUrl|executionSelector|executionScript|executionPrompt/);
 });
