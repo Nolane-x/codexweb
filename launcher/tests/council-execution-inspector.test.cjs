@@ -6,24 +6,20 @@ const path = require("node:path");
 const root = path.join(__dirname, "..");
 const app = fs.readFileSync(path.join(root, "src", "CouncilApp.tsx"), "utf8");
 const types = fs.readFileSync(path.join(root, "src", "types.ts"), "utf8");
+const inspectorPath = path.join(root, "src", "CouncilExecutionInspector.tsx");
 const cssPath = path.join(root, "src", "council-execution.css");
-
-function executionSlice(source) {
-  const start = source.indexOf("function ExecutionInspector");
-  assert.notEqual(start, -1, "ExecutionInspector must exist inside the existing Mission Control shell");
-  return source.slice(start);
-}
+const inspector = fs.existsSync(inspectorPath) ? fs.readFileSync(inspectorPath, "utf8") : "";
 
 test("Mission Control adds executions as one destination in the existing single shell", () => {
   assert.match(app, /type View\s*=\s*[^;]*["']executions["']/s);
   assert.match(app, /id:\s*["']executions["],\s*label:\s*["']Executions["],\s*hint:/);
   assert.match(app, /view\s*===\s*["']executions["]\s*\?\s*<ExecutionInspector/);
   assert.doesNotMatch(app, /ExecutionShell|ExecutionWindow|createRoot\([^)]*Execution/);
+  assert.equal(fs.existsSync(inspectorPath), true, "CouncilExecutionInspector.tsx must exist inside the Mission Control composition");
   assert.equal(fs.existsSync(cssPath), true, "council-execution.css must be created for the inspector");
 });
 
 test("execution inspector consumes only the trusted typed launcher API", () => {
-  const inspector = executionSlice(app);
   for (const method of [
     "councilExecutionRuns",
     "councilExecutionEvents",
@@ -40,7 +36,6 @@ test("execution inspector consumes only the trusted typed launcher API", () => {
 });
 
 test("execution truth is abnormal-first and exposes safety state without reasoning theatre", () => {
-  const inspector = executionSlice(app);
   assert.match(inspector, /Execution Inspector/i);
   assert.match(inspector, /Deep State/i);
   assert.match(inspector, /Retry safety/i);
@@ -55,7 +50,6 @@ test("execution truth is abnormal-first and exposes safety state without reasoni
 });
 
 test("retry and cancel actions are mechanically guarded by current run state", () => {
-  const inspector = executionSlice(app);
   assert.match(inspector, /retrySafety\s*===\s*["']safe-before-submit["']/);
   assert.match(inspector, /status\s*===\s*["']failed["].*status\s*===\s*["']aborted["]|status\s*===\s*["']aborted["].*status\s*===\s*["']failed["]/s);
   assert.match(inspector, /status\s*===\s*["']active["].*cancel|cancel.*status\s*===\s*["']active["]/si);
@@ -64,7 +58,6 @@ test("retry and cancel actions are mechanically guarded by current run state", (
 });
 
 test("inspector renders bounded events and immutable command receipts", () => {
-  const inspector = executionSlice(app);
   assert.match(inspector, /events\.map/);
   assert.match(inspector, /event\.kind/);
   assert.match(inspector, /event\.phase|event\.deepState/);
