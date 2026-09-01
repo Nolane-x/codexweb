@@ -16,6 +16,7 @@ jobs:
       tag: ${{ steps.meta.outputs.tag }}
       version: ${{ steps.meta.outputs.version }}
       tag_exists: ${{ steps.meta.outputs.tag_exists }}
+      release_required: ${{ steps.meta.outputs.release_required }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -46,20 +47,20 @@ jobs:
           test "$version" != "null"
           tag="v${version}"
           existing="$(git ls-remote --tags origin "refs/tags/${tag}" | awk '{print $1}')"
-          if [ -n "$existing" ] && [ "$existing" != "$GITHUB_SHA" ]; then
-            echo "::error::${tag} already points to ${existing}, while main is ${GITHUB_SHA}. Bump package version before publishing another release."
-            exit 1
-          fi
           echo "version=${version}" >> "$GITHUB_OUTPUT"
           echo "tag=${tag}" >> "$GITHUB_OUTPUT"
           if [ -n "$existing" ]; then
             echo "tag_exists=true" >> "$GITHUB_OUTPUT"
+            echo "release_required=false" >> "$GITHUB_OUTPUT"
+            echo "${tag} is already published at ${existing}; skipping release build and publish for this main push."
           else
             echo "tag_exists=false" >> "$GITHUB_OUTPUT"
+            echo "release_required=true" >> "$GITHUB_OUTPUT"
           fi
 
   build:
     needs: prepare
+    if: ${{ needs.prepare.outputs.release_required == 'true' }}
     strategy:
       fail-fast: false
       matrix:
@@ -122,6 +123,7 @@ jobs:
 
   publish:
     needs: [prepare, build]
+    if: ${{ needs.prepare.outputs.release_required == 'true' }}
     runs-on: ubuntu-latest
     env:
       RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
